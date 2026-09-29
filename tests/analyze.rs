@@ -2527,32 +2527,6 @@ end
 }
 
 #[test]
-fn boolean_cast_and_key_conversions_type() {
-    let app = app_from_files(&[
-        (
-            "app/models/application_record.rb",
-            "class ApplicationRecord < ActiveRecord::Base\nend\n",
-        ),
-        (
-            "app/models/thing.rb",
-            r#"class Thing < ApplicationRecord
-  def probe(flag)
-    on = ActiveModel::Type::Boolean.new.cast(flag)
-    h = { a: "x" }
-    [on.nil?, h.stringify_keys.keys.first.upcase, h.deep_symbolize_keys.keys.first.to_s, h.symbolize_keys.size]
-  end
-end
-"#,
-        ),
-    ]);
-
-    let failures = send_dispatch_failures(&app);
-    for m in ["cast", "stringify_keys", "deep_symbolize_keys", "symbolize_keys", "upcase", "keys"] {
-        assert!(!failures.iter().any(|f| f == m), "`{m}` should resolve; failures = {failures:?}");
-    }
-}
-
-#[test]
 fn gem_catalog_resolves_third_party_surface() {
     // The gem catalog (src/catalog/gems.rs) resolves the third-party
     // surface apps call: class methods (`Arel.sql`, `ROTP::Base32.random`),
@@ -4328,4 +4302,30 @@ end
         set_room[0]
     );
     assert!(set_room[0].from_concern.is_none(), "the controller's own declaration won, not the concern's");
+}
+
+#[test]
+fn boolean_cast_and_key_conversions_type() {
+    let app = app_from_files(&[
+        (
+            "app/models/application_record.rb",
+            "class ApplicationRecord < ActiveRecord::Base\nend\n",
+        ),
+        (
+            "app/models/thing.rb",
+            r#"class Thing < ApplicationRecord
+  def probe(flag)
+    on = ActiveModel::Type::Boolean.new.cast(flag)
+    h = { a: "x" }
+    [on.nil?, h.stringify_keys.keys.first.upcase, h.deep_symbolize_keys.keys.first.to_s, h.symbolize_keys.size]
+  end
+end
+"#,
+        ),
+    ]);
+
+    let failures = send_dispatch_failures(&app);
+    for m in ["cast", "stringify_keys", "deep_symbolize_keys", "symbolize_keys", "upcase", "keys"] {
+        assert!(!failures.iter().any(|f| f == m), "`{m}` should resolve; failures = {failures:?}");
+    }
 }
