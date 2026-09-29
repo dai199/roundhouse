@@ -435,6 +435,13 @@ pub(in crate::analyze) fn register(classes: &mut HashMap<ClassId, ClassInfo>) {
         let methods: Vec<(&str, Ty)> = methods;
         register_stdlib_class(classes, exc, &[], &methods);
     }
+    // The spinel `csv` package's writer surface: `CSV.generate { |csv| csv << row }` answers the accumulated String.
+    let csv = Ty::Class { id: ClassId(Symbol::from("CSV")), args: vec![] };
+    register_stdlib_class(classes, "CSV", &[("generate", Ty::Str), ("generate_line", Ty::Str)], &[
+        ("<<", csv.clone()),
+        ("add_row", csv.clone()),
+        ("string", Ty::Str),
+    ]);
     // Not a typed store: a thread-local slot holds whatever the caller put there, so `[]` answers untyped.
     let thread = Ty::Class { id: ClassId(Symbol::from("Thread")), args: vec![] };
     register_stdlib_class(classes, "Thread", &[("current", thread.clone())], &[

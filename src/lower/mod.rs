@@ -47,6 +47,7 @@ pub mod as_json_poro;
 pub mod active_model_model;
 pub mod enumerable_ext;
 pub mod time_calendar;
+pub mod csv_generate;
 pub mod where_range_split;
 pub mod params_merge;
 pub mod duration;
@@ -325,6 +326,8 @@ const POST_ANALYZE_PASS_ORDER: &[(&str, &[&str])] = &[
     ("time_calendar", &[]),
     // After time_calendar: `t.all_month` becomes the Range literal this splits out.
     ("where_range_split", &["time_calendar"]),
+    // No runs_after: it rewrites a `CSV.generate` call's own arguments and block.
+    ("csv_generate", &[]),
     // `Rooms::Open.count` → `Room.where(type: "Rooms::Open").count`.
     // Produces a `where` at a model Const root, which is vocabulary
     // every later pass already reads; consumes nothing any pass
@@ -730,6 +733,8 @@ pub fn apply_post_analyze_lowerings(
     ran!("time_calendar");
     diags.extend(where_range_split::apply_where_range_split(app));
     ran!("where_range_split");
+    csv_generate::apply_csv_generate_lowering(app);
+    ran!("csv_generate");
     sti_scope::apply_sti_scope_lowering(app);
     ran!("sti_scope");
     relation_ivar_materialize::apply_relation_ivar_materialize(app);
