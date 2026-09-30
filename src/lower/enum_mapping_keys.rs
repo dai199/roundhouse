@@ -17,14 +17,35 @@ pub fn apply_enum_mapping_keys(app: &mut App) {
                 .map(move |col| (name.clone(), crate::naming::pluralize_snake(col.as_str())))
         })
         .collect();
-    super::for_each_hook_body(app, &mut |body| rewrite(body, &mappings));
+    // Not only `Model.statuses`: inside the model, `statuses`, `self.statuses` and `self.class.statuses` name the same mapping.
+    for model in &mut app.models {
+        let own: HashSet<String> =
+            model.enums.keys().map(|col| crate::naming::pluralize_snake(col.as_str())).collect();
+        if own.is_empty() {
+            continue;
+        }
+        for item in &mut model.body {
+            match item {
+                crate::dialect::ModelBodyItem::Method { method, .. } => {
+                    let class_ctx = matches!(method.receiver, crate::dialect::MethodReceiver::Class);
+                    rewrite(&mut method.body, &mappings, Some((&own, class_ctx)));
+                }
+                crate::dialect::ModelBodyItem::Scope { scope, .. } => {
+                    rewrite(&mut scope.body, &mappings, Some((&own, true)));
+                }
+                _ => {}
+            }
+        }
+    }
+    super::for_each_hook_body(app, &mut |body| rewrite(body, &mappings, None));
+    super::for_each_test_body(app, &mut |body| rewrite(body, &mappings, None));
     for view in &mut app.views {
-        rewrite(&mut view.body, &mappings);
+        rewrite(&mut view.body, &mappings, None);
     }
 }
 
-fn rewrite(expr: &mut Expr, mappings: &HashSet<(String, String)>) {
-    expr.node.for_each_child_mut(&mut |c| rewrite(c, mappings));
+fn rewrite(expr: &mut Expr, mappings: &HashSet<(String, String)>, own: Option<(&HashSet<String>, bool)>) {
+    expr.node.for_each_child_mut(&mut |c| rewrite(c, mappings, own));
     let ExprNode::Send {
         recv: Some(r),
         method,
@@ -37,7 +58,7 @@ fn rewrite(expr: &mut Expr, mappings: &HashSet<(String, String)>) {
     if !matches!(
         method.as_str(),
         "[]" | "fetch" | "key?" | "has_key?" | "include?" | "member?" | "dig" | "except" | "slice"
-    ) || !is_enum_mapping(r, mappings)
+    ) || !(is_enum_mapping(r, mappings) || own.is_some_and(|(plurals, class_ctx)| is_own_mapping(r, plurals, class_ctx)))
     {
         return;
     }
@@ -100,4 +121,24 @@ fn is_enum_mapping(e: &Expr, mappings: &HashSet<(String, String)>) -> bool {
         .collect::<Vec<_>>()
         .join("::");
     args.is_empty() && mappings.contains(&(model, method.as_str().to_string()))
+}
+
+fn is_own_mapping(e: &Expr, plurals: &HashSet<String>, class_ctx: bool) -> bool {
+    let ExprNode::Send { recv, method, args, block: None, .. } = &*e.node else {
+        return false;
+    };
+    if !args.is_empty() || !plurals.contains(method.as_str()) {
+        return false;
+    }
+    let is_self = |r: &Option<Expr>| match r {
+        None => true,
+        Some(r) => matches!(&*r.node, ExprNode::SelfRef),
+    };
+    match recv {
+        Some(r) if matches!(&*r.node, ExprNode::Send { method, args, .. } if method.as_str() == "class" && args.is_empty()) => {
+            let ExprNode::Send { recv: inner, .. } = &*r.node else { unreachable!() };
+            is_self(inner)
+        }
+        _ => class_ctx && is_self(recv),
+    }
 }
