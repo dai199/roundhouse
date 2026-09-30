@@ -151,12 +151,15 @@ impl Overlay {
         }
 
         let mut app = ingest_app(&source).expect("ingest the overlaid fixture");
-        Analyzer::new(&app).analyze(&mut app);
+        let mut analyzer = Analyzer::new(&app);
+        analyzer.analyze(&mut app);
         let errors = diagnose(&app)
             .into_iter()
             .filter(|d| d.severity == Severity::Error)
             .map(|d| format!("{:?}: {}", d.span, d.message))
             .collect();
+        // Not emitted from the analyzed IR alone: the CLI lowers before it emits, and a construct grounded by a lowering pass would otherwise fail here and nowhere else.
+        let _ = roundhouse::lower::apply_post_analyze_lowerings(&mut app, analyzer.class_registry());
 
         let emitted = scratch.join("emitted");
         let files = roundhouse::project::target_files(&app, &source, BuildTarget::Ruby)

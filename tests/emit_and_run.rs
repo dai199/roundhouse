@@ -219,3 +219,28 @@ fn a_before_action_that_calls_another_private_method_runs() {
         .run_test("test/controllers/articles_controller_test.rb")
         .assert_passes();
 }
+
+/// Not emitted from the analyzed IR alone: `beginning_of_month` runs only as the `ActiveSupport` call a lowering pass rewrites it to.
+#[test]
+fn a_construct_grounded_by_a_lowering_pass_runs() {
+    emit_and_run::real_blog()
+        .edit(
+            "app/models/article.rb",
+            "class Article < ApplicationRecord\n  has_many :comments, dependent: :destroy",
+            "class Article < ApplicationRecord\n  has_many :comments, dependent: :destroy\n\n  \
+             def calendar_probe\n    \
+               Time.utc(2026, 9, 15, 10, 30).beginning_of_month.day\n  \
+             end",
+        )
+        .write(
+            "test/models/article_calendar_test.rb",
+            "require \"test_helper\"\n\n\
+             class ArticleCalendarTest < ActiveSupport::TestCase\n  \
+               test \"a lowered calendar method answers as ActiveSupport does\" do\n    \
+                 assert_equal 1, Article.new.calendar_probe\n  \
+               end\n\
+             end\n",
+        )
+        .run_test("test/models/article_calendar_test.rb")
+        .assert_passes();
+}
