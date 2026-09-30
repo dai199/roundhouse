@@ -31,6 +31,17 @@ module ActiveRecord
   # A value that names no label falls through to `to_i`, which is what
   # an integer (or its string spelling) already meant — the same `to_i`
   # the per-column `Cast` did before this existed.
+  # Not `values.index(value)`: a stored value no label names answers nil, the way Rails' reader does.
+  def self.enum_label(value, labels, values)
+    result = nil
+    i = 0
+    while i < values.length
+      result = labels[i] if values[i] == value
+      i += 1
+    end
+    result
+  end
+
   def self.enum_int(text, labels, values)
     result = -1
     i = 0
