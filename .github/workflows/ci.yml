@@ -5,11 +5,16 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    # `ready_for_review`: a draft runs `unit` alone, so leaving draft has to start the full run.
+    types: [opened, synchronize, reopened, ready_for_review]
+    # Not on `push`: every commit on main keeps a full run.
+    paths-ignore: ['**.md', 'docs/**']
 
-# Cancel superseded PR runs without serializing distinct PRs or main pushes.
-# Pages keeps its separate deployment-only lock below.
+# Cancel superseded PR runs. On main, a started run finishes and a burst of
+# pushes collapses to the newest queued one, so each run that starts is
+# validated to the end. Pages keeps its separate deployment-only lock below.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -33,6 +38,8 @@ env:
 
 jobs:
   writebook-inventory:
+    needs: unit
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -130,7 +137,8 @@ jobs:
   # goes red it is the analyzer's next entry, not noise.
   # -------------------------------------------------------------------
   store-check:
-    needs: generate-fixture
+    needs: [generate-fixture, unit]
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -165,6 +173,8 @@ jobs:
   # need is the WASI SDK (a manual tarball, cached here).
   # -------------------------------------------------------------------
   build-wasm:
+    needs: unit
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     # The job normally finishes in a few minutes; a hung apt install
     # once rode the old 45-minute ceiling and stalled the whole
@@ -224,6 +234,8 @@ jobs:
   # churn turns flaky.
   # -------------------------------------------------------------------
   build-spinel:
+    needs: unit
+    if: ${{ !github.event.pull_request.draft }}
     # Re-enabled 2026-06-17 (framework-tests-spinel 5/5 + compare-spinel 7/7
     # green again on matz/spinel master). Tracks matz/spinel master UNPINNED,
     # so it can go red independently of any roundhouse change; continue-on-error
@@ -391,7 +403,8 @@ jobs:
   # typescript's dual-profile tsc + node:test (async coloring).
   # -------------------------------------------------------------------
   toolchain-crystal:
-    needs: generate-fixture
+    needs: [generate-fixture, unit]
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -413,6 +426,8 @@ jobs:
         run: cargo test --test crystal_toolchain -- --ignored --nocapture
 
   framework-tests-swift:
+    needs: unit
+    if: ${{ !github.event.pull_request.draft }}
     # Per-target framework-test conformance gate for the Swift target:
     # transpiles runtime/ruby/test/**/*_test.rb to XCTest classes and runs
     # them together under one `swift test`, independent of the fixtures.
@@ -449,7 +464,8 @@ jobs:
   # the diagnostic `dump_transpiled_blog_tsc_errors` non-asserting
   # helper. Drop the filter once tiny_blog reaches parity.
   toolchain-typescript:
-    needs: generate-fixture
+    needs: [generate-fixture, unit]
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -469,6 +485,8 @@ jobs:
         run: cargo test --test typescript_toolchain real_blog -- --ignored --nocapture
 
   framework-tests-typescript:
+    needs: unit
+    if: ${{ !github.event.pull_request.draft }}
     # Per-target framework-test conformance gate. Transpiles
     # runtime/ruby/test/**/*_test.rb to TS and runs under tsx.
     # Independent of the real-blog fixture (each test builds a
@@ -511,7 +529,8 @@ jobs:
   # NOT from the published archive. Playwright config gates on $CI
   # (GitHub sets it) → fresh server + forbidOnly + github reporter.
   browser-smoke-typescript:
-    needs: generate-fixture
+    needs: [generate-fixture, unit]
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -662,6 +681,8 @@ jobs:
           (cd wasm/studio && node verify-studio.mjs)
 
   framework-tests-crystal:
+    needs: unit
+    if: ${{ !github.event.pull_request.draft }}
     # Per-target framework-test conformance gate for the Crystal
     # target. Transpiles runtime/ruby/test/**/*_test.rb through
     # crystal::emit and runs the result under `crystal spec`.
@@ -689,6 +710,8 @@ jobs:
         run: cargo test --test framework_tests_crystal -- --ignored --nocapture
 
   framework-tests-kotlin:
+    needs: unit
+    if: ${{ !github.event.pull_request.draft }}
     # Per-target framework-test conformance gate for the Kotlin target.
     # Transpiles runtime/ruby/test/**/*_test.rb through kotlin::emit and
     # runs the emitted JUnit-5 spec under `gradle test`. Independent of the
@@ -720,6 +743,8 @@ jobs:
         run: cargo test --test framework_tests_kotlin -- --ignored --nocapture
 
   framework-tests-rust:
+    needs: unit
+    if: ${{ !github.event.pull_request.draft }}
     # Per-target framework-test conformance gate for the Rust target.
     # Transpiles runtime/ruby/test/**/*_test.rb through rust2::emit and
     # runs the emitted crate under `cargo test`. Independent of the
@@ -747,6 +772,8 @@ jobs:
         run: cargo test --test framework_tests_rust -- --ignored --nocapture inflector
 
   framework-tests-ruby:
+    needs: unit
+    if: ${{ !github.event.pull_request.draft }}
     # Per-target framework-test conformance gate for the Ruby target
     # (CRuby/MRI). Transpiles runtime/ruby/test/**/*_test.rb through
     # ruby::emit_spinel (named for historical reasons; emits the
@@ -907,6 +934,8 @@ jobs:
   # walk against the compiled binary and stay advisory, because spinel
   # is tracked unpinned.
   campfire-compare:
+    needs: unit
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     services:
@@ -1239,6 +1268,8 @@ jobs:
         run: scripts/campfire-db-differential --spinel /tmp/campfire
 
   campfire-conformance:
+    needs: unit
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -1646,7 +1677,8 @@ jobs:
           if-no-files-found: warn
 
   toolchain-elixir:
-    needs: generate-fixture
+    needs: [generate-fixture, unit]
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -1788,7 +1820,8 @@ jobs:
     # (system `python3`, which the `python_toolchain` test shells out to);
     # `from __future__ import annotations` keeps the emit version-agnostic
     # back to 3.11 (the emitted `requires-python`).
-    needs: generate-fixture
+    needs: [generate-fixture, unit]
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -1808,7 +1841,8 @@ jobs:
         run: cargo test --test python_toolchain -- --ignored --nocapture
 
   toolchain-csharp:
-    needs: generate-fixture
+    needs: [generate-fixture, unit]
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -1881,7 +1915,8 @@ jobs:
   # below: two setup-ruby steps / an extra build-spinel dependency don't
   # fit this shape.
   compare:
-    needs: generate-fixture
+    needs: [generate-fixture, unit]
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -1971,7 +2006,8 @@ jobs:
   # for tailwindcss asset compilation; no target compile step
   # (Ruby is interpreted).
   compare-ruby:
-    needs: generate-fixture
+    needs: [generate-fixture, unit]
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -2009,7 +2045,8 @@ jobs:
   # assets aren't built (the DOM diff compares asset tags, not files —
   # see scripts/compare's jruby branch).
   compare-jruby:
-    needs: generate-fixture
+    needs: [generate-fixture, unit]
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
