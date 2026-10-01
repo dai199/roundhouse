@@ -33,13 +33,13 @@ module ActiveRecord
   # the per-column `Cast` did before this existed.
   # Not `values.index(value)`: a stored value no label names answers nil, the way Rails' reader does.
   def self.enum_label(value, labels, values)
-    result = nil
+    found = -1
     i = 0
     while i < values.length
-      result = labels[i] if values[i] == value
+      found = i if values[i] == value
       i += 1
     end
-    result
+    found == -1 ? nil : labels[found]
   end
 
   def self.enum_int(text, labels, values)

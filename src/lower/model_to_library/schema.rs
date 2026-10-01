@@ -2709,19 +2709,21 @@ fn enum_label_read(model: &Model, col: &Column) -> Option<Expr> {
         super::ty_of_column_slot(col),
     );
     let (labels, values) = enum_arrays(model, col)?;
-    Some(with_ty(
+    let non_nil = with_ty(stored.clone(), Ty::Int);
+    let call = with_ty(
         Expr::new(
             Span::synthetic(),
             ExprNode::Send {
                 recv: Some(Expr::new(Span::synthetic(), ExprNode::Const { path: vec![Symbol::from("ActiveRecord")] })),
                 method: Symbol::from("enum_label"),
-                args: vec![stored, labels, values],
+                args: vec![non_nil, labels, values],
                 block: None,
                 parenthesized: true,
             },
         ),
         Ty::Union { variants: vec![Ty::Str, Ty::Nil] },
-    ))
+    );
+    Some(with_ty(nil_guarded(col, stored, call), Ty::Union { variants: vec![Ty::Str, Ty::Nil] }))
 }
 
 fn enum_arrays(model: &Model, col: &Column) -> Option<(Expr, Expr)> {
