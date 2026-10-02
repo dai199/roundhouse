@@ -1,1 +1,14 @@
 exports_files(glob(["*.py", "*.sh"]))
+
+# Re-exported under the main repository so the -sys crates' build scripts can name them.
+alias(
+    name = "libclang",
+    actual = "@llvm_toolchain_llvm//:libclang",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "clang_includes",
+    actual = "@llvm_toolchain_llvm//:include",
+    visibility = ["//visibility:public"],
+)
