@@ -124,7 +124,7 @@ jobs:
         run: |
           set +e
           bazel test --config=rbe "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" --keep_going \
-            --test_tag_filters=unit //:all 2>&1 | tee bazel-unit.log
+            --test_output=errors --test_tag_filters=unit //:all 2>&1 | tee bazel-unit.log
           status=${PIPESTATUS[0]}
           grep -E 'INFO: [0-9]+ processes|Executed [0-9]+ out of' bazel-unit.log >> "$GITHUB_STEP_SUMMARY"
           grep -E '^//:.* (FAILED|NO STATUS|FAILED TO BUILD)' bazel-unit.log >> "$GITHUB_STEP_SUMMARY" || true

@@ -66,6 +66,8 @@ genrule(
     outs = ["real-blog-fixture.tar"],
     cmd = " && ".join([
         "export HOME=$$PWD/$(RULEDIR)/home",
+        # Not on Bazel's PATH: the ruby image installs gem executables under /usr/local/bundle/bin.
+        "export PATH=/usr/local/bundle/bin:$$PATH",
         "gem install rails -v %s --no-document >/dev/null" % RAILS_VERSION,
         "RAILS_NEW_VERSION=%s $(location scripts/create-blog) $(RULEDIR)/fx/real-blog >/dev/null" % RAILS_VERSION,
         "(cd $(RULEDIR)/fx/real-blog && bundle install --quiet && bin/rails db:prepare >/dev/null)",
@@ -143,6 +145,8 @@ sh_test(
 TEST_DATA = glob(
     [
         "*",
+        ".github/**",
+        ".cargo/**",
         "fixtures/**",
         "tests/**",
         "runtime/**",
