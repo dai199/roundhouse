@@ -125,22 +125,6 @@ genrule(
     tools = ["//bazel:pack.py"],
 )
 
-sh_test(
-    name = "compare_rust_test",
-    srcs = ["//bazel:compare_rust.sh"],
-    args = [
-        "$(rootpath :real_blog_fixture)",
-        "$(rootpath :emit_blog_rust)",
-        "$(rootpath //tools/compare:roundhouse-compare)",
-    ],
-    data = [":real_blog_fixture", ":emit_blog_rust", "//tools/compare:roundhouse-compare"],
-    exec_properties = {
-        "container-image": CI_IMAGE,
-        "network": "external",
-    },
-    tags = ["requires-network"],
-    timeout = "long",
-)
 
 # What the test suites read from the repository, relative to its root.
 TEST_DATA = glob(
@@ -228,31 +212,7 @@ genrule(
     tools = ["//bazel:asset_graph.sh", "//bazel:pack.py"],
 )
 
-# The published archives the smoke lanes test.
-SMOKE_TARGETS = ["rust"]
 
-genrule(
-    name = "site_archives",
-    srcs = [":real_blog_fixture", ":asset_graph"] + glob(["site/**", "docs/guide/**"]) + [
-        "RELEASES.md",
-        "scripts/create-blog",
-    ],
-    outs = ["browse/%s.tgz" % t for t in SMOKE_TARGETS],
-    cmd = "$(location //bazel:site_archives.sh) $(location :roundhouse) " +
-          "$(location :real_blog_fixture) $(location :asset_graph) $(RULEDIR)/browse " + " ".join(SMOKE_TARGETS),
-    exec_properties = {"container-image": CI_IMAGE},
-    tools = [":roundhouse", "//bazel:site_archives.sh"],
-)
-
-[sh_test(
-    name = "smoke_%s_test" % t,
-    srcs = ["scripts/smoke"],
-    args = ["--tgz", "$(rootpath :browse/%s.tgz)" % t, t],
-    data = [":browse/%s.tgz" % t],
-    exec_properties = {"container-image": CI_IMAGE, "network": "external"},
-    tags = ["requires-network"],
-    timeout = "long",
-) for t in SMOKE_TARGETS]
 
 # matz/spinel at the commit `--define=SPINEL_SHA=…` names (the workflow resolves master).
 genrule(
@@ -264,15 +224,6 @@ genrule(
     tools = ["//bazel:spinel_dist.sh", "//bazel:pack.py"],
 )
 
-sh_test(
-    name = "framework_tests_spinel",
-    srcs = ["//bazel:with_spinel.sh"],
-    args = ["$(rootpath :spinel_dist)", "$(rootpath :test_framework_tests_spinel)"],
-    data = [":spinel_dist", ":test_framework_tests_spinel"],
-    env = TEST_ENV,
-    exec_properties = {"container-image": CI_IMAGE},
-    timeout = "long",
-)
 
 genrule(
     name = "campfire_src",
@@ -323,3 +274,121 @@ sh_test(
     tags = ["requires-network"],
     timeout = "eternal",
 )
+
+rust_binary(
+    name = "emit_preview",
+    srcs = ["src/bin/emit_preview.rs"],
+    compile_data = EMBEDDED,
+    edition = "2024",
+    deps = [":roundhouse_lib"] + all_crate_deps(normal = True),
+)
+
+# ---- compare: every target, as `scripts/compare --skip-emit` ----
+
+# emit_preview's tree for the compiled targets; `roundhouse --target` for the
+# ruby family, as `bin/rh transpile` writes it.
+PREVIEW_TARGETS = ["typescript", "crystal", "rust", "python", "elixir", "go", "kotlin", "swift", "csharp"]
+
+COMPARE_TARGETS = PREVIEW_TARGETS + ["ruby", "jruby", "spinel"]
+
+[genrule(
+    name = "compare_emit_%s" % t,
+    srcs = [":real_blog_fixture"],
+    outs = ["compare-emit-%s.tar" % t],
+    cmd = ("mkdir -p $(RULEDIR)/cmp-src-%s/real-blog && tar -xf $(location :real_blog_fixture) -C $(RULEDIR)/cmp-src-%s/real-blog && " % (t, t) +
+           ("$(location :emit_preview) --target %s --out $(RULEDIR)/cmp-%s $(RULEDIR)/cmp-src-%s/real-blog >/dev/null && " % (t, t, t)
+            if t in PREVIEW_TARGETS else
+            "$(location :roundhouse) --target %s -o $(RULEDIR)/cmp-%s $(RULEDIR)/cmp-src-%s/real-blog >/dev/null && " % (t, t, t)) +
+           "python3 $(location //bazel:pack.py) $(RULEDIR)/cmp-%s $@" % t),
+    exec_properties = {"container-image": CI_IMAGE},
+    tools = [":emit_preview", ":roundhouse", "//bazel:pack.py"],
+) for t in COMPARE_TARGETS]
+
+[sh_test(
+    name = "compare_%s_test" % t,
+    srcs = ["//bazel:compare.sh"],
+    args = [
+        t,
+        "$(rootpath :real_blog_fixture)",
+        "$(rootpath :compare_emit_%s)" % t,
+        "$(rootpath //tools/compare:roundhouse-compare)",
+    ] + (["$(rootpath :spinel_dist)"] if t == "spinel" else []),
+    data = [":real_blog_fixture", ":compare_emit_%s" % t, "//tools/compare:roundhouse-compare"] +
+           glob(["scripts/**", "bin/**", "runtime/**"]) + ([":spinel_dist"] if t == "spinel" else []),
+    exec_properties = {"container-image": CI_IMAGE, "network": "external"},
+    tags = ["requires-network", "lane"],
+    timeout = "eternal",
+) for t in COMPARE_TARGETS]
+
+# ---- smoke: every published archive, as `scripts/smoke` ----
+
+SMOKE_TARGETS = ["rust", "crystal", "kotlin", "swift", "csharp", "typescript", "go", "elixir", "python", "ruby", "jruby", "spinel"]
+
+genrule(
+    name = "site_archives",
+    srcs = [":real_blog_fixture", ":asset_graph"] + glob(["site/**", "docs/guide/**"]) + [
+        "RELEASES.md",
+        "scripts/create-blog",
+    ],
+    outs = ["browse/%s.tgz" % t for t in SMOKE_TARGETS],
+    cmd = "$(location //bazel:site_archives.sh) $(location :roundhouse) " +
+          "$(location :real_blog_fixture) $(location :asset_graph) $(RULEDIR)/browse " + " ".join(SMOKE_TARGETS),
+    exec_properties = {"container-image": CI_IMAGE},
+    tools = [":roundhouse", "//bazel:site_archives.sh"],
+)
+
+[sh_test(
+    name = "smoke_%s_test" % t,
+    srcs = ["//bazel:smoke.sh"],
+    args = [t, "$(rootpath :browse/%s.tgz)" % t] + (["$(rootpath :spinel_dist)"] if t == "spinel" else []),
+    data = [":browse/%s.tgz" % t] + glob(["scripts/**"]) + ([":spinel_dist"] if t == "spinel" else []),
+    exec_properties = {"container-image": CI_IMAGE, "network": "external"},
+    tags = ["requires-network", "lane"],
+    timeout = "eternal",
+) for t in SMOKE_TARGETS]
+
+# ---- the toolchain and framework-test lanes: `cargo test --test X -- --ignored [FILTER]` ----
+
+IGNORED_LANES = {
+    "framework_tests_rust": ["inflector"],
+    "framework_tests_swift": [],
+    "framework_tests_typescript": [],
+    "framework_tests_crystal": [],
+    "framework_tests_kotlin": [],
+    "framework_tests_ruby": [],
+    "uuid_key_ruby": [],
+    "crystal_toolchain": [],
+    "typescript_toolchain": ["real_blog"],
+    "elixir_toolchain": [],
+    "python_toolchain": [],
+    "csharp_toolchain": ["--test-threads=1"],
+}
+
+SPINEL_IGNORED_LANES = {
+    "framework_tests_spinel": [],
+    "spinel_web_push_crypto": [],
+    "spinel_db_lease": [],
+    "spinel_toolchain": [],
+}
+
+[sh_test(
+    name = "lane_%s" % name,
+    srcs = ["//bazel:run_ignored.sh"],
+    args = ["$(rootpath :test_%s)" % name] + filters,
+    data = [":test_%s" % name],
+    env = TEST_ENV,
+    exec_properties = {"container-image": CI_IMAGE, "network": "external"},
+    tags = ["requires-network", "lane", "needs-source-fixtures"],
+    timeout = "eternal",
+) for name, filters in IGNORED_LANES.items()]
+
+[sh_test(
+    name = "lane_%s" % name,
+    srcs = ["//bazel:run_ignored.sh"],
+    args = ["--spinel", "$(rootpath :spinel_dist)", "$(rootpath :test_%s)" % name] + filters,
+    data = [":spinel_dist", ":test_%s" % name],
+    env = TEST_ENV,
+    exec_properties = {"container-image": CI_IMAGE, "network": "external"},
+    tags = ["requires-network", "lane", "needs-source-fixtures"],
+    timeout = "eternal",
+) for name, filters in SPINEL_IGNORED_LANES.items()]
