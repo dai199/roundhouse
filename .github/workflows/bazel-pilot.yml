@@ -33,7 +33,7 @@ jobs:
         run: |
           image=$(sed -n 's|^CI_IMAGE = "docker://\(.*\)"|\1|p' bazel/images.bzl)
           if docker manifest inspect "$image" >/dev/null 2>&1; then echo "$image exists"; exit 0; fi
-          docker build -t "$image" bazel/images/all
+          docker build -t "$image" -f bazel/images/all/Dockerfile .
           docker push "$image"
 
   all-rbe:

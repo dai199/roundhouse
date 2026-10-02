@@ -12,6 +12,8 @@ cp -RL scripts runtime "$work/repo/"
 tar -xzf "$campfire_tar" -C "$work/campfire" --strip-components=1
 tar -xf "$emit_tar" -C "$work/emit"
 redis-server --daemonize yes --save "" --appendonly no >/dev/null
+# Not left running: a daemon still holding the test's output keeps the test from ending.
+trap 'redis-cli shutdown nosave >/dev/null 2>&1 || true' EXIT
 cd "$work/repo"
 scripts/campfire-oracle prepare --app "$work/campfire"
 scripts/campfire-compare "$@" --reuse "$work/emit" "$work/campfire"

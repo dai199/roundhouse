@@ -2,7 +2,8 @@ load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
-load("//bazel:images.bzl", "CAMPFIRE_SHA", "CI_IMAGE")
+load("//bazel:lanes.bzl", "repo_lane")
+load("//bazel:images.bzl", "CAMPFIRE_SHA", "CI_IMAGE", "MASTODON_SHA", "RUBY_BENCH_SHA", "WRITEBOOK_SHA")
 
 exports_files(["Cargo.toml", "Cargo.lock"])
 
@@ -392,3 +393,72 @@ SPINEL_IGNORED_LANES = {
     tags = ["requires-network", "lane", "needs-source-fixtures"],
     timeout = "eternal",
 ) for name, filters in SPINEL_IGNORED_LANES.items()]
+
+# ---- the remaining lanes: ci.yml's steps, run from a writable copy of the repository ----
+
+REPO_LANE_DATA = TEST_DATA + ["//bazel:shim", ":roundhouse", ":emit_preview", "//tools/compare:all_files"]
+
+LANE = {"data": REPO_LANE_DATA, "env": TEST_ENV}
+
+repo_lane(base = LANE, name = "lane_store_check", script = "store_check")
+
+repo_lane(base = LANE, name = "lane_browser_smoke_typescript", script = "browser_smoke_typescript")
+
+genrule(
+    name = "writebook_src",
+    outs = ["writebook.tar.gz"],
+    cmd = "curl -fsSL https://codeload.github.com/basecamp/writebook/tar.gz/%s -o $@" % WRITEBOOK_SHA,
+    exec_properties = {"container-image": CI_IMAGE, "network": "external"},
+    tags = ["requires-network"],
+)
+
+sh_test(
+    name = "lane_writebook_inventory",
+    srcs = ["//bazel:run_ignored.sh"],
+    args = ["--writebook", "$(rootpath :writebook_src)", "$(rootpath :test_writebook)"],
+    data = [":writebook_src", ":test_writebook"],
+    env = TEST_ENV,
+    exec_properties = {"container-image": CI_IMAGE},
+    tags = ["lane", "needs-source-fixtures"],
+    timeout = "eternal",
+)
+
+# The wasm build is its own cargo workspace (wasm/Cargo.toml) on the WASI SDK.
+genrule(
+    name = "roundhouse_wasm",
+    srcs = glob(["wasm/**", "src/**"], exclude = ["wasm/target/**", "wasm/**/node_modules/**"]) + EMBEDDED + [
+        "Cargo.toml",
+        "Cargo.lock",
+        "build.rs",
+    ],
+    outs = ["roundhouse_wasm.wasm"],
+    cmd = ("export CARGO_HOME=$$(mktemp -d) CARGO_TARGET_DIR=$$(mktemp -d) && " +
+           "cargo build --quiet --release --target wasm32-wasip1 --manifest-path wasm/Cargo.toml && " +
+           "cp $$CARGO_TARGET_DIR/wasm32-wasip1/release/roundhouse_wasm.wasm $@"),
+    exec_properties = {"container-image": CI_IMAGE, "network": "external"},
+    tags = ["requires-network"],
+)
+
+repo_lane(base = LANE, name = "lane_browser_smoke_ide",
+    script = "browser_smoke_ide",
+    args = ["$(rootpath :roundhouse_wasm)", MASTODON_SHA, RUBY_BENCH_SHA, CAMPFIRE_SHA],
+    data = [":roundhouse_wasm"],
+)
+
+repo_lane(base = LANE, name = "lane_campfire_conformance",
+    script = "campfire_conformance",
+    campfire = True,
+    env = {"FLOOR_TESTS": "392", "FLOOR_FILES": "66"},
+)
+
+repo_lane(base = LANE, name = "lane_campfire_db_differential_spinel", script = "campfire_db_differential", campfire = True, spinel = True)
+
+repo_lane(base = LANE, name = "lane_smoke_campfire", script = "smoke_campfire", campfire = True, spinel = True)
+
+# Docker inside the executor: BuildBuddy starts a dockerd in a Firecracker microVM on request.
+repo_lane(base = LANE, name = "lane_smoke_campfire_docker",
+    script = "smoke_campfire_docker",
+    campfire = True,
+    spinel = True,
+    exec_properties = {"workload-isolation-type": "firecracker", "init-dockerd": "true"},
+)

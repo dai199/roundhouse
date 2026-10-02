@@ -1,4 +1,10 @@
-exports_files(glob(["*.py", "*.sh"]))
+exports_files(glob(["*.py", "*.sh", "lanes/*.sh"]))
+
+filegroup(
+    name = "shim",
+    srcs = ["shim/cargo", "with_repo.sh"],
+    visibility = ["//visibility:public"],
+)
 
 # Re-exported under the main repository so the -sys crates' build scripts can name them.
 alias(

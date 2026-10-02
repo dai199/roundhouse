@@ -23,5 +23,11 @@ if [[ -n "$dist_tar" ]]; then
   dist="$work/spinel-dist"; mkdir -p "$dist"; tar -xf "$dist_tar" -C "$dist"
   chmod +x "$dist/spinel" "$dist/spin" "$dist/spinel_rbs_extract"; export PATH="$dist:$PATH"
 fi
+if [[ "$target" == jruby ]]; then
+  # Not the image's GEM_HOME: those are CRuby's gems, built extensions and all, and JRuby skips every one.
+  mkdir -p "$work/jruby-shim"
+  printf '#!/bin/bash\nexport GEM_HOME="%s/jruby-gems"; unset GEM_PATH BUNDLE_PATH\nexec /usr/local/bin/jruby "$@"\n' "$work" > "$work/jruby-shim/jruby"
+  chmod +x "$work/jruby-shim/jruby"; export PATH="$work/jruby-shim:$PATH"
+fi
 cd "$repo"
 exec scripts/compare --skip-emit "$target"

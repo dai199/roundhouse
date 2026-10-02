@@ -1,6 +1,6 @@
 # One image for every lane the remote executors run: Ruby + Rails's needs,
 # Rust for roundhouse's emitted Rust, and each target's toolchain at the
-# version ci.yml pins. Bazel runs actions with PATH=/bin:/usr/bin:/usr/local/bin,
+# version ci.yml pins. Built from the repository root (the scaffold Gemfile). Bazel runs actions with PATH=/bin:/usr/bin:/usr/local/bin,
 # so every toolchain's commands are linked into /usr/local/bin.
 FROM ruby:3.4
 
@@ -8,15 +8,23 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
       sqlite3 python3 redis-server libvips42 libvips-dev libsqlite3-dev libjemalloc-dev \
       unzip xz-utils binutils gnupg2 libc6-dev libcurl4-openssl-dev libedit2 libgcc-12-dev \
       libpython3-dev libstdc++-12-dev libxml2-dev libz3-dev pkg-config tzdata zlib1g-dev libncurses-dev \
-      libpcre2-dev libssl-dev libyaml-dev libgmp-dev libevent-dev >/dev/null \
+      libpcre2-dev libssl-dev libyaml-dev libgmp-dev libevent-dev ffmpeg libclang-dev >/dev/null \
  && rm -rf /var/lib/apt/lists/*
+
+# The spinel scaffold's bundle: the ruby-family suites and archives run under BUNDLE_GEMFILE=runtime/spinel/scaffold/Gemfile.
+COPY runtime/spinel/scaffold/Gemfile runtime/spinel/scaffold/Gemfile.lock /opt/scaffold/
+RUN cd /opt/scaffold && bundle install --quiet
 
 RUN gem install rails-html-sanitizer sqlite3 puma nio4r websocket-driver rack bcrypt ruby-vips \
       concurrent-ruby net-http-persistent web-push --no-document
 
 ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
 RUN curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal --default-toolchain 1.98.1 \
+ && /usr/local/cargo/bin/rustup target add wasm32-wasip1 \
  && ln -s /usr/local/cargo/bin/* /usr/local/bin/
+RUN mkdir -p /opt/wasi-sdk && curl -fsSL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-33/wasi-sdk-33.0-x86_64-linux.tar.gz \
+      | tar -xz -C /opt/wasi-sdk --strip-components=1
+ENV WASI_SDK_PATH=/opt/wasi-sdk
 
 RUN curl -fsSL https://nodejs.org/dist/v20.20.2/node-v20.20.2-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1 \
  && npx -y playwright@1.56.1 install-deps chromium >/dev/null && rm -rf /var/lib/apt/lists/*
