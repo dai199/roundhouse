@@ -454,6 +454,8 @@ repo_lane(base = LANE, name = "lane_browser_smoke_ide",
     script = "browser_smoke_ide",
     args = ["$(rootpath :roundhouse_wasm)", MASTODON_SHA, RUBY_BENCH_SHA, CAMPFIRE_SHA],
     data = [":roundhouse_wasm"],
+    # Alone on a fork's four-core runner: beside other tests, the in-browser mastodon transpile passes its 60s limit.
+    tags = ["cpu:4"],
 )
 
 repo_lane(base = LANE, name = "lane_campfire_conformance",
