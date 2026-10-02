@@ -302,3 +302,24 @@ sh_test(
     tags = ["requires-network"],
     timeout = "eternal",
 )
+
+genrule(
+    name = "campfire_spinel_build",
+    srcs = [":campfire_src", ":spinel_dist"],
+    outs = ["campfire-spinel.tar"],
+    cmd = ("$(location //bazel:campfire_spinel_build.sh) $(location :roundhouse) $(location :campfire_src) " +
+           "$(location :spinel_dist) $@ $(location //bazel:pack.py)"),
+    exec_properties = {"container-image": CI_IMAGE, "network": "external"},
+    tags = ["requires-network"],
+    tools = [":roundhouse", "//bazel:campfire_spinel_build.sh", "//bazel:pack.py"],
+)
+
+sh_test(
+    name = "campfire_compare_spinel_test",
+    srcs = ["//bazel:campfire_compare.sh"],
+    args = ["$(rootpath :campfire_src)", "$(rootpath :campfire_spinel_build)", "--spinel"],
+    data = [":campfire_src", ":campfire_spinel_build"] + glob(["scripts/**", "runtime/**"]),
+    exec_properties = {"container-image": CI_IMAGE, "network": "external"},
+    tags = ["requires-network"],
+    timeout = "eternal",
+)
