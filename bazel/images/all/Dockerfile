@@ -8,7 +8,7 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
       sqlite3 python3 redis-server libvips42 libvips-dev libsqlite3-dev libjemalloc-dev \
       unzip xz-utils binutils gnupg2 libc6-dev libcurl4-openssl-dev libedit2 libgcc-12-dev \
       libpython3-dev libstdc++-12-dev libxml2-dev libz3-dev pkg-config tzdata zlib1g-dev libncurses-dev \
-      libpcre2-dev libssl-dev libyaml-dev libgmp-dev libevent-dev ffmpeg libclang-dev >/dev/null \
+      libpcre2-dev libssl-dev libyaml-dev libgmp-dev libevent-dev ffmpeg libclang-dev clang rsync >/dev/null \
  && rm -rf /var/lib/apt/lists/*
 
 # The spinel scaffold's bundle: the ruby-family suites and archives run under BUNDLE_GEMFILE=runtime/spinel/scaffold/Gemfile.
