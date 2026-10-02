@@ -35,6 +35,7 @@ crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
     build_script_env_files = ["@@//bazel:bindgen_env"] if name.endswith("-sys") else [],
     compile_data_glob = ["**"],
     crate = name,
+    repositories = ["crates"],
     patch_args = ["-p1"],
     patches = ["//bazel/patches:%s-build.patch" % name],
 ) for name in ["ruby-rbs", "ruby-rbs-sys", "ruby-prism", "ruby-prism-sys"]]
@@ -44,4 +45,9 @@ crate.from_cargo(
     cargo_lockfile = "//:Cargo.lock",
     manifests = ["//:Cargo.toml"],
 )
-use_repo(crate, "crates")
+crate.from_cargo(
+    name = "compare_crates",
+    cargo_lockfile = "//tools/compare:Cargo.lock",
+    manifests = ["//tools/compare:Cargo.toml"],
+)
+use_repo(crate, "compare_crates", "crates")

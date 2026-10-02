@@ -88,3 +88,29 @@ TEST_IMAGES = {
     tags = ["requires-network"],
     timeout = "long",
 ) for target in ["rust", "kotlin", "swift"]]
+
+# The fixture as Rails serves it: its seeded DB included.
+genrule(
+    name = "real_blog_tar",
+    srcs = [":real_blog", "fixtures/real-blog/storage/development.sqlite3"],
+    outs = ["real-blog.tar"],
+    cmd = "python3 $(location //bazel:pack.py) fixtures/real-blog $@",
+    tools = ["//bazel:pack.py"],
+)
+
+sh_test(
+    name = "compare_rust_test",
+    srcs = ["//bazel:compare_rust.sh"],
+    args = [
+        "$(rootpath :real_blog_tar)",
+        "$(rootpath :emit_blog_rust)",
+        "$(rootpath //tools/compare:roundhouse-compare)",
+    ],
+    data = [":real_blog_tar", ":emit_blog_rust", "//tools/compare:roundhouse-compare"],
+    exec_properties = {
+        "container-image": "docker://ruby:3.4",
+        "network": "external",
+    },
+    tags = ["requires-network"],
+    timeout = "long",
+)
