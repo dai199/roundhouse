@@ -196,9 +196,13 @@ rust_test(
     name = "test_" + f[len("tests/"):-len(".rs")],
     srcs = glob(["tests/**/*.rs"]),
     crate_root = f,
-    data = TEST_DATA + [":roundhouse"],
+    data = TEST_DATA + [":roundhouse", "//tools/compare:all_files"],
     edition = "2024",
-    rustc_env = {"CARGO_BIN_EXE_roundhouse": "$(rootpath :roundhouse)"},
+    rustc_env = {
+        "CARGO_BIN_EXE_roundhouse": "$(rootpath :roundhouse)",
+        # Not the compile sandbox: the suites join repo paths onto this, and they run from the runfiles root.
+        "CARGO_MANIFEST_DIR": ".",
+    },
     compile_data = EMBEDDED + glob(["tests/**"], exclude = ["tests/**/*.rs"]),
     env = TEST_ENV,
     exec_properties = UNIT_EXEC,
