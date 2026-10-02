@@ -23,7 +23,10 @@ shift
 for b in roundhouse emit_preview; do [[ -f "$b" ]] && cp "$b" "$work/bins/$b"; done
 export ROUNDHOUSE_BINS="$work/bins"
 # Not the runfiles tree: the lanes write build/, tmp/ and node_modules/ under the repository.
-cp -RL . "$repo/" 2>/dev/null || true
+# Dangling links (a runfiles tree's unbuilt outputs) are skipped; any other copy error stops the lane.
+if ! cp -RL . "$repo/" 2>"$work/cp.err"; then
+  if grep -v 'No such file or directory' "$work/cp.err" >&2; then exit 1; fi
+fi
 chmod +x "$repo/bazel/shim/cargo"
 export PATH="$repo/bazel/shim:/usr/local/bundle/bin:$PATH"
 cd "$repo"

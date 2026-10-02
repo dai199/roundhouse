@@ -61,7 +61,7 @@ genrule(
         "python3 $(location //bazel:pack.py) $(RULEDIR)/fx/real-blog $@",
     ]),
     exec_properties = {
-        "container-image": "docker://ruby:3.4",
+        "container-image": CI_IMAGE,
         "network": "external",
     },
     tags = ["requires-network"],
@@ -81,7 +81,7 @@ genrule(
         "python3 $(location //bazel:pack.py) $(RULEDIR)/fx/store $@",
     ]),
     exec_properties = {
-        "container-image": "docker://ruby:3.4",
+        "container-image": CI_IMAGE,
         "network": "external",
     },
     tags = ["requires-network"],

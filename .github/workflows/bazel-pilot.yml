@@ -13,6 +13,9 @@ concurrency:
   group: bazel-pilot-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   images:
     # The remote executors' images, published to GHCR for BuildBuddy to pull.
