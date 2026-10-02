@@ -11,3 +11,10 @@ build:bb --build_metadata=ROLE=CI
 
 # The emitted project's tests run the host's cargo.
 test --test_env=PATH --test_env=HOME --test_env=CARGO_HOME --test_env=RUSTUP_HOME --test_env=RUSTUP_TOOLCHAIN --test_env=JAVA_HOME --test_env=GRADLE_USER_HOME
+
+# A pull request reads the cache with a read-only key and never writes to it,
+# as a fork's pull request must (it sees no secrets).
+build:bb-ro --remote_cache=grpcs://remote.buildbuddy.io
+build:bb-ro --remote_timeout=10m
+build:bb-ro --remote_download_minimal
+build:bb-ro --noremote_upload_local_results

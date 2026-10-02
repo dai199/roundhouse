@@ -47,13 +47,17 @@ jobs:
           repository-cache: true
       - name: bazel test (rust, kotlin, swift)
         env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_ORG_API_KEY }}
+          BUILDBUDDY_API_KEY: ${{ github.event_name == 'push' && secrets.BUILDBUDDY_ORG_API_KEY || '' }}
+          BUILDBUDDY_READONLY_API_KEY: ${{ vars.BUILDBUDDY_READONLY_API_KEY }}
         run: |
           # Not a hard requirement: a fork PR has no secrets, so it runs without the remote cache.
           # Not the job PATH: the Swift toolchain leads it, and the C toolchain autoconfiguration then resolves a linker that is not there.
           flags=(--repo_env=PATH=/usr/local/bin:/usr/bin:/bin)
+          # Not the write key on a pull request: a fork's pull request has none, so every PR reads only.
           if [ -n "$BUILDBUDDY_API_KEY" ]; then
             flags+=(--config=bb "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY")
+          elif [ -n "$BUILDBUDDY_READONLY_API_KEY" ]; then
+            flags+=(--config=bb-ro "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_READONLY_API_KEY")
           fi
           bazel test "${flags[@]}" //:blog_rust_test //:blog_kotlin_test //:blog_swift_test 2>&1 | tee bazel-test.log
           grep -E '^//:blog_' bazel-test.log >> "$GITHUB_STEP_SUMMARY"
