@@ -44,11 +44,16 @@ jobs:
     # Pilot: every lane as Bazel tests, executed on BuildBuddy; this job only orchestrates.
     # Two jobs, not one run: Spinel master moves many times a day, and its lanes would hold back the gating result.
     name: all-rbe (${{ matrix.set }})
-    if: github.event_name == 'push'
+    # A pull request skips the image job (it cannot push), and runs on the images main already published.
+    if: ${{ !cancelled() && needs.images.result != 'failure' }}
     needs: images
     runs-on: ubuntu-latest
     timeout-minutes: 120
     continue-on-error: ${{ matrix.set == 'advisory' }}
+    env:
+      # A fork's pull request sees no secrets, so its read-only key is a variable.
+      BUILDBUDDY_API_KEY: ${{ github.event_name == 'push' && secrets.BUILDBUDDY_ORG_API_KEY || vars.BUILDBUDDY_READONLY_API_KEY || secrets.BUILDBUDDY_READONLY_API_KEY }}
+      BB_CONFIG: ${{ github.event_name == 'push' && 'rbe' || 'rbe-ro' }}
     strategy:
       fail-fast: false
       matrix:
@@ -65,20 +70,16 @@ jobs:
           repository-cache: true
       - name: Fixtures (real-blog, store) the source-tree suites read
         # Not `bin/rh fixture` here: each run's fresh `rails new` differs in bytes, and every test reading it would miss the cache.
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_ORG_API_KEY }}
         run: |
-          bazel build --config=rbe "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" --remote_download_toplevel \
+          bazel build --config=$BB_CONFIG "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" --remote_download_toplevel \
             //:real_blog_fixture //:store_fixture
           mkdir -p fixtures/real-blog fixtures/store
           tar -xf bazel-bin/real-blog-fixture.tar -C fixtures/real-blog
           tar -xf bazel-bin/store-fixture.tar -C fixtures/store
       - name: bazel test --config=rbe //:all (${{ matrix.set }})
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_ORG_API_KEY }}
         run: |
           set +e
-          bazel test --config=rbe "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" --keep_going \
+          bazel test --config=$BB_CONFIG "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" --keep_going \
             --test_output=errors --jobs=80 --build_tests_only --test_tag_filters=${{ matrix.filter }} \
             --define=SPINEL_SHA="$(git ls-remote https://github.com/matz/spinel refs/heads/master | cut -f1)" \
             //:all 2>&1 | tee bazel-all.log

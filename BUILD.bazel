@@ -252,7 +252,11 @@ rust_binary(
     deps = [":roundhouse_lib"] + all_crate_deps(normal = True),
 )
 
-OTHER_BINS = ["roundhouse-ast", "roundhouse-check", "roundhouse-lsp", "roundhouse-mcp", "dump_ir"]
+OTHER_BINS = [
+    f[len("src/bin/"):-len(".rs")]
+    for f in glob(["src/bin/*.rs"])
+    if f not in ["src/bin/roundhouse.rs", "src/bin/emit_preview.rs"]
+]
 
 [rust_binary(
     name = b,
