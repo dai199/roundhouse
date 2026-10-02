@@ -27,11 +27,15 @@ build:rbe --remote_executor=grpcs://remote.buildbuddy.io
 build:rbe --platforms=@toolchains_buildbuddy//platforms:linux_x86_64
 build:rbe --extra_execution_platforms=@toolchains_buildbuddy//platforms:linux_x86_64
 build:rbe --jobs=50
+# Not the client's autodetected C toolchain: its paths and flags enter every action key, so a run from another
+# machine (a fork's job in the executors' image) would miss the whole cache.
+build:rbe --extra_toolchains=@llvm_toolchain//:all
 # A fork's pull request: the executors' platform declared, so its action keys match the cache main fills,
 # but run here (`container:` is the executors' image); unsandboxed, as a container cannot nest namespaces.
 build:fork --config=bb-ro
 build:fork --platforms=@toolchains_buildbuddy//platforms:linux_x86_64
 build:fork --extra_execution_platforms=@toolchains_buildbuddy//platforms:linux_x86_64
 build:fork --spawn_strategy=local
+build:fork --extra_toolchains=@llvm_toolchain//:all
 
 build --define=SPINEL_SHA=master
