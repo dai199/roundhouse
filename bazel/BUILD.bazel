@@ -19,7 +19,7 @@ genrule(
     name = "bindgen_env",
     outs = ["bindgen.env"],
     cmd = select({
-        "@platforms//os:linux": "echo 'BINDGEN_EXTRA_CLANG_ARGS=-isystem $${pwd}/external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/19/include' > $@",
+        "@platforms//os:linux": "echo 'BINDGEN_EXTRA_CLANG_ARGS=-resource-dir $${pwd}/external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/19' > $@",
         "//conditions:default": "touch $@",
     }),
     visibility = ["//visibility:public"],
