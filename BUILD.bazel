@@ -119,6 +119,11 @@ TEST_DATA = glob(
         "**/.bundle/**",
         "**/* *",
         "bazel-*/**",
+        # Not inputs of any suite: an edit to the Bazel setup alone would otherwise re-run every test.
+        "**/BUILD.bazel",
+        "MODULE.bazel*",
+        ".bazel*",
+        ".github/workflows/bazel-pilot.yml",
     ],
     allow_empty = True,
 )
