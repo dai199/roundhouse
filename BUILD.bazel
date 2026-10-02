@@ -3,7 +3,7 @@ load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//bazel:lanes.bzl", "repo_lane")
-load("//bazel:images.bzl", "CAMPFIRE_SHA", "CI_IMAGE", "MASTODON_SHA", "RUBY_BENCH_SHA", "WRITEBOOK_SHA")
+load("//bazel:images.bzl", "CAMPFIRE_SHA", "CI_IMAGE", "DIND_IMAGE", "MASTODON_SHA", "RUBY_BENCH_SHA", "WRITEBOOK_SHA")
 
 exports_files(["Cargo.toml", "Cargo.lock"])
 
@@ -487,7 +487,7 @@ sh_test(
     args = ["$(rootpath :campfire/docker.tgz)"],
     data = [":campfire/docker.tgz"],
     exec_properties = {
-        "container-image": "docker://docker:27-dind",
+        "container-image": DIND_IMAGE,
         "workload-isolation-type": "firecracker",
         "init-dockerd": "true",
         "network": "external",

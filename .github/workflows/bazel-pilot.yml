@@ -29,12 +29,16 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push the tag bazel/images.bzl names
+      - name: Build and push the tags bazel/images.bzl names
         run: |
-          image=$(sed -n 's|^CI_IMAGE = "docker://\(.*\)"|\1|p' bazel/images.bzl)
-          if docker manifest inspect "$image" >/dev/null 2>&1; then echo "$image exists"; exit 0; fi
-          docker build -t "$image" -f bazel/images/all/Dockerfile .
-          docker push "$image"
+          build() {
+            image=$(sed -n "s|^$1 = \"docker://\\(.*\\)\"|\\1|p" bazel/images.bzl)
+            if docker manifest inspect "$image" >/dev/null 2>&1; then echo "$image exists"; return; fi
+            docker build -t "$image" -f "$2" .
+            docker push "$image"
+          }
+          build CI_IMAGE bazel/images/all/Dockerfile
+          build DIND_IMAGE bazel/images/dind/Dockerfile
 
   all-rbe:
     # Pilot: every lane as Bazel tests, executed on BuildBuddy; this job only orchestrates.
