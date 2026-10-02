@@ -16,20 +16,25 @@ concurrency:
 jobs:
   images:
     # The remote executors' images, published to GHCR for BuildBuddy to pull.
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
       contents: read
       packages: write
+    outputs:
+      ci-image: ${{ steps.ref.outputs.ci-image }}
     steps:
       - uses: actions/checkout@v5
-      - uses: docker/login-action@v3
+      - id: ref
+        run: echo "ci-image=$(sed -n 's|^CI_IMAGE = "docker://\(.*\)"|\1|p' bazel/images.bzl)" >> "$GITHUB_OUTPUT"
+      - if: github.event_name == 'push'
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push the tags bazel/images.bzl names
+        if: github.event_name == 'push'
         run: |
           build() {
             image=$(sed -n "s|^$1 = \"docker://\\(.*\\)\"|\\1|p" bazel/images.bzl)
@@ -44,16 +49,14 @@ jobs:
     # Pilot: every lane as Bazel tests, executed on BuildBuddy; this job only orchestrates.
     # Two jobs, not one run: Spinel master moves many times a day, and its lanes would hold back the gating result.
     name: all-rbe (${{ matrix.set }})
-    # A pull request skips the image job (it cannot push), and runs on the images main already published.
-    if: ${{ !cancelled() && needs.images.result != 'failure' }}
+    if: ${{ !(github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'simulate-fork'))) }}
     needs: images
     runs-on: ubuntu-latest
     timeout-minutes: 120
     continue-on-error: ${{ matrix.set == 'advisory' }}
     env:
-      # A fork's pull request sees no secrets, so its read-only key is a variable.
-      BUILDBUDDY_API_KEY: ${{ github.event_name == 'push' && secrets.BUILDBUDDY_ORG_API_KEY || vars.BUILDBUDDY_READONLY_API_KEY || secrets.BUILDBUDDY_READONLY_API_KEY }}
-      BB_CONFIG: ${{ github.event_name == 'push' && 'rbe' || 'rbe-ro' }}
+      BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_ORG_API_KEY }}
+      BB_CONFIG: rbe
     strategy:
       fail-fast: false
       matrix:
@@ -81,6 +84,51 @@ jobs:
           set +e
           bazel test --config=$BB_CONFIG "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" --keep_going \
             --test_output=errors --jobs=80 --build_tests_only --test_tag_filters=${{ matrix.filter }} \
+            --define=SPINEL_SHA="$(git ls-remote https://github.com/matz/spinel refs/heads/master | cut -f1)" \
+            //:all 2>&1 | tee bazel-all.log
+          status=${PIPESTATUS[0]}
+          grep -E 'INFO: [0-9]+ processes|Executed [0-9]+ out of|Elapsed time' bazel-all.log >> "$GITHUB_STEP_SUMMARY"
+          grep -E '^//:.* (FAILED|NO STATUS|FAILED TO BUILD|TIMEOUT)' bazel-all.log >> "$GITHUB_STEP_SUMMARY" || true
+          exit $status
+
+  fork:
+    # A fork's pull request sees no secrets, and a read-only key cannot upload remote execution's inputs:
+    # it reads the cache main fills, and runs the misses here, in the executors' image.
+    name: fork (${{ matrix.set }})
+    if: ${{ github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'simulate-fork')) }}
+    needs: images
+    runs-on: ubuntu-latest
+    container: ${{ needs.images.outputs.ci-image }}
+    timeout-minutes: 180
+    continue-on-error: ${{ matrix.set == 'advisory' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - set: gating
+            filter: -advisory,-rbe-only
+          - set: advisory
+            filter: advisory,-rbe-only
+    env:
+      BUILDBUDDY_API_KEY: ${{ vars.BUILDBUDDY_READONLY_API_KEY || secrets.BUILDBUDDY_READONLY_API_KEY }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+      - name: Fixtures (real-blog, store) the source-tree suites read
+        run: |
+          bazel build --config=fork "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" --remote_download_toplevel \
+            //:real_blog_fixture //:store_fixture
+          mkdir -p fixtures/real-blog fixtures/store
+          tar -xf bazel-bin/real-blog-fixture.tar -C fixtures/real-blog
+          tar -xf bazel-bin/store-fixture.tar -C fixtures/store
+      - name: bazel test --config=fork //:all (${{ matrix.set }})
+        run: |
+          set +e
+          bazel test --config=fork "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" --keep_going \
+            --test_output=errors --build_tests_only --test_tag_filters=${{ matrix.filter }} \
             --define=SPINEL_SHA="$(git ls-remote https://github.com/matz/spinel refs/heads/master | cut -f1)" \
             //:all 2>&1 | tee bazel-all.log
           status=${PIPESTATUS[0]}

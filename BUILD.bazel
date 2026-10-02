@@ -505,6 +505,6 @@ sh_test(
         "EstimatedMemory": "8GB",
         "EstimatedFreeDiskBytes": "20GB",
     },
-    tags = ["requires-network", "lane", "advisory"],
+    tags = ["requires-network", "lane", "advisory", "rbe-only"],
     timeout = "long",
 )
