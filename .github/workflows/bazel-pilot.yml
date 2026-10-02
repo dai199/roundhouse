@@ -105,3 +105,34 @@ jobs:
           bazel test --config=rbe "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" --nocache_test_results \
             //:blog_rust_test //:blog_kotlin_test //:blog_swift_test //:compare_rust_test 2>&1 | tee bazel-rbe-test.log
           grep -E '^//:|INFO: [0-9]+ processes' bazel-rbe-test.log >> "$GITHUB_STEP_SUMMARY"
+
+  unit-rbe:
+    # Pilot: the whole `cargo test` suite as Bazel tests, executed on BuildBuddy.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+      - name: Generate fixtures (real-blog, store)
+        run: |
+          gem install rails --no-document
+          bin/rh fixture
+          (cd fixtures && ../scripts/create-store store)
+      - uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+      - name: bazel test --config=rbe (unit suites)
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_ORG_API_KEY }}
+        run: |
+          set +e
+          bazel test --config=rbe "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" --keep_going \
+            --test_tag_filters=unit //:all 2>&1 | tee bazel-unit.log
+          status=${PIPESTATUS[0]}
+          grep -E 'INFO: [0-9]+ processes|Executed [0-9]+ out of' bazel-unit.log >> "$GITHUB_STEP_SUMMARY"
+          grep -E '^//:.* (FAILED|NO STATUS|FAILED TO BUILD)' bazel-unit.log >> "$GITHUB_STEP_SUMMARY" || true
+          exit $status

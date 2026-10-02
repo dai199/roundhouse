@@ -1,6 +1,6 @@
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 exports_files(["Cargo.toml", "Cargo.lock"])
@@ -114,3 +114,65 @@ sh_test(
     tags = ["requires-network"],
     timeout = "long",
 )
+
+# What the test suites read from the repository, relative to its root.
+TEST_DATA = glob(
+    [
+        "*",
+        "fixtures/**",
+        "tests/**",
+        "runtime/**",
+        "e2e/**",
+        "docs/**",
+        "scripts/**",
+        "bin/**",
+        "assets/**",
+        "site/**",
+        "wasm/**",
+        "tools/**",
+        "editors/**",
+        "bench/**",
+        "kotlin-reference/**",
+        "swift-reference/**",
+    ],
+    exclude = [
+        "**/node_modules/**",
+        "**/tmp/**",
+        "**/log/**",
+        "**/target/**",
+        "**/.bundle/**",
+        "**/* *",
+        "bazel-*/**",
+    ],
+    allow_empty = True,
+)
+
+# .cargo/config.toml's [env]: the analyzer's recursive walkers need more than a test thread's default stack.
+TEST_ENV = {"RUST_MIN_STACK": "33554432"}
+
+# Remotely, the suites run in an image with Ruby: some drive the emitted Ruby tree.
+UNIT_EXEC = {"container-image": "docker://ruby:3.4"}
+
+rust_test(
+    name = "lib_test",
+    crate = ":roundhouse_lib",
+    data = TEST_DATA,
+    env = TEST_ENV,
+    exec_properties = UNIT_EXEC,
+    tags = ["unit"],
+)
+
+[rust_test(
+    name = "test_" + f[len("tests/"):-len(".rs")],
+    srcs = glob(["tests/**/*.rs"]),
+    crate_root = f,
+    data = TEST_DATA + [":roundhouse"],
+    edition = "2024",
+    rustc_env = {"CARGO_BIN_EXE_roundhouse": "$(rootpath :roundhouse)"},
+    compile_data = EMBEDDED + glob(["tests/**"], exclude = ["tests/**/*.rs"]),
+    env = TEST_ENV,
+    exec_properties = UNIT_EXEC,
+    tags = ["unit"],
+    deps = [":roundhouse_lib"] + all_crate_deps(normal = True, normal_dev = True),
+    proc_macro_deps = all_crate_deps(proc_macro = True, proc_macro_dev = True),
+) for f in glob(["tests/*.rs"])]
