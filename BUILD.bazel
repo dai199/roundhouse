@@ -147,6 +147,7 @@ TEST_DATA = glob(
         "*",
         ".github/**",
         ".cargo/**",
+        "src/**",
         "fixtures/**",
         "tests/**",
         "runtime/**",
@@ -180,7 +181,7 @@ TEST_ENV = {"RUST_MIN_STACK": "33554432"}
 
 # Remotely, the suites run in an image with Ruby: some drive the emitted Ruby tree.
 # `test.`: the image is for running the suite; compiling it stays on the C toolchain's platform.
-UNIT_EXEC = {"test.container-image": "docker://ruby:3.4"}
+UNIT_EXEC = {"test.container-image": "docker://ghcr.io/dai199/roundhouse-ci-ruby:3.4"}
 
 rust_test(
     name = "lib_test",

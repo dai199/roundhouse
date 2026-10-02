@@ -14,6 +14,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  images:
+    # The remote executors' images, published to GHCR for BuildBuddy to pull.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push roundhouse-ci-ruby
+        run: |
+          docker build -t ghcr.io/${{ github.repository_owner }}/roundhouse-ci-ruby:3.4 bazel/images/ruby
+          docker push ghcr.io/${{ github.repository_owner }}/roundhouse-ci-ruby:3.4
+
   blog-rust:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -102,6 +121,7 @@ jobs:
   unit-rbe:
     # Pilot: the whole `cargo test` suite as Bazel tests, executed on BuildBuddy.
     if: github.event_name == 'push'
+    needs: images
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
