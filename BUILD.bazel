@@ -210,3 +210,47 @@ rust_test(
     deps = [":roundhouse_lib"] + all_crate_deps(normal = True, normal_dev = True),
     proc_macro_deps = all_crate_deps(proc_macro = True, proc_macro_dev = True),
 ) for f in glob(["tests/*.rs"])]
+
+CI_IMAGE = "docker://ghcr.io/dai199/roundhouse-ci-ruby:3.4"
+
+genrule(
+    name = "asset_graph",
+    srcs = [
+        ":real_blog_fixture",
+        "e2e/package.json",
+        "e2e/package-lock.json",
+        "runtime/spinel/scaffold/Gemfile",
+        "runtime/spinel/scaffold/Gemfile.lock",
+    ],
+    outs = ["assets.tar"],
+    cmd = "$(location //bazel:asset_graph.sh) $(location :real_blog_fixture) e2e runtime/spinel/scaffold $@ $(location //bazel:pack.py)",
+    exec_properties = {"container-image": CI_IMAGE, "network": "external"},
+    tags = ["requires-network"],
+    tools = ["//bazel:asset_graph.sh", "//bazel:pack.py"],
+)
+
+# The published archives the smoke lanes test.
+SMOKE_TARGETS = ["rust"]
+
+genrule(
+    name = "site_archives",
+    srcs = [":real_blog_fixture", ":asset_graph"] + glob(["site/**", "docs/guide/**"]) + [
+        "RELEASES.md",
+        "scripts/create-blog",
+    ],
+    outs = ["browse/%s.tgz" % t for t in SMOKE_TARGETS],
+    cmd = "$(location //bazel:site_archives.sh) $(location :roundhouse) " +
+          "$(location :real_blog_fixture) $(location :asset_graph) $(RULEDIR)/browse " + " ".join(SMOKE_TARGETS),
+    exec_properties = {"container-image": CI_IMAGE},
+    tools = [":roundhouse", "//bazel:site_archives.sh"],
+)
+
+[sh_test(
+    name = "smoke_%s_test" % t,
+    srcs = ["scripts/smoke"],
+    args = ["--tgz", "$(rootpath :browse/%s.tgz)" % t, t],
+    data = [":browse/%s.tgz" % t],
+    exec_properties = {"container-image": CI_IMAGE, "network": "external"},
+    tags = ["requires-network"],
+    timeout = "long",
+) for t in SMOKE_TARGETS]
