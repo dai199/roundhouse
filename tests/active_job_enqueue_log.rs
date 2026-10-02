@@ -192,3 +192,4 @@ fn job_classes_in_test_filters_become_names() {
         "a filter-only job class must not survive as a constant:\n{ir}"
     );
 }
+
