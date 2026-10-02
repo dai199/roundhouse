@@ -90,3 +90,4 @@ pub use schema::{Column, ColumnType, ForeignKey, Index, ReferentialAction, Schem
 pub use span::{FileId, Span};
 pub use ty::{Param, ParamKind, Row, Ty};
 // pilot probe: leaves every emitted target unchanged
+// pilot probe 2: leaves every emitted target unchanged
