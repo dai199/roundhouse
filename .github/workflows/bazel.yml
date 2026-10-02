@@ -14,6 +14,9 @@ concurrency:
   # Not cancelled on main: each push's result is the record for its commit.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+permissions:
+  contents: read
+
 jobs:
   images:
     # The remote executors' images, published to GHCR for BuildBuddy to pull.

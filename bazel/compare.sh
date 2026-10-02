@@ -17,6 +17,7 @@ case "$target" in
   typescript) build_dir=/tmp/rh-ts-pass2 ;; rust) build_dir=/tmp/rh-rs-pass2 ;; python) build_dir=/tmp/rh-py-pass2 ;;
   go) build_dir=/tmp/rh-go-pass2 ;; crystal) build_dir=/tmp/rh-cr-pass2 ;; kotlin) build_dir=/tmp/rh-kt-pass2 ;;
   swift) build_dir=/tmp/rh-swift-pass2 ;; csharp) build_dir=/tmp/rh-cs-pass2 ;; elixir) build_dir=/tmp/rh-ex-pass2 ;;
+  *) echo "compare.sh: unknown target $target" >&2; exit 2 ;;
 esac
 rm -rf "$build_dir"; mkdir -p "$build_dir"; tar -xf "$emit_tar" -C "$build_dir"
 if [[ -n "$dist_tar" ]]; then
