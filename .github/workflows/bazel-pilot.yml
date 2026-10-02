@@ -111,12 +111,16 @@ jobs:
             filter: advisory,-rbe-only
     env:
       BUILDBUDDY_API_KEY: ${{ vars.BUILDBUDDY_READONLY_API_KEY || secrets.BUILDBUDDY_READONLY_API_KEY }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v5
-      - uses: bazel-contrib/setup-bazel@0.15.0
-        with:
-          bazelisk-cache: true
-          repository-cache: true
+      - name: Bazelisk
+        # Not setup-bazel: inside a job container the bazel it installs is not on PATH.
+        run: |
+          curl -fsSL https://github.com/bazelbuild/bazelisk/releases/download/v1.27.0/bazelisk-linux-amd64 -o /usr/local/bin/bazel
+          chmod +x /usr/local/bin/bazel
       - name: Fixtures (real-blog, store) the source-tree suites read
         run: |
           bazel build --config=fork "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" --remote_download_toplevel \
