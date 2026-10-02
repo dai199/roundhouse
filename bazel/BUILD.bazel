@@ -8,18 +8,24 @@ alias(
 )
 
 alias(
+    name = "clang",
+    actual = "@llvm_toolchain_llvm//:bin/clang",
+    visibility = ["//visibility:public"],
+)
+
+alias(
     name = "clang_includes",
     actual = "@llvm_toolchain_llvm//:include",
     visibility = ["//visibility:public"],
 )
 
-# Linux only: a remote executor's libclang does not find clang's builtin headers on its own,
-# while on macOS adding them ahead of the SDK breaks <stdint.h>.
+# Linux only: bindgen asks a `clang` for the header search path, and a remote executor has none;
+# on macOS the host's clang pairs with the SDK.
 genrule(
     name = "bindgen_env",
     outs = ["bindgen.env"],
     cmd = select({
-        "@platforms//os:linux": "echo 'BINDGEN_EXTRA_CLANG_ARGS=-resource-dir $${pwd}/external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/19' > $@",
+        "@platforms//os:linux": "echo 'CLANG_PATH=$${pwd}/external/toolchains_llvm++llvm+llvm_toolchain_llvm/bin/clang' > $@",
         "//conditions:default": "touch $@",
     }),
     visibility = ["//visibility:public"],

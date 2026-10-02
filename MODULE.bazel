@@ -28,7 +28,7 @@ crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 # CARGO_MANIFEST_DIR, which is the compile sandbox under Bazel; the patches
 # read it at run time instead.
 [crate.annotation(
-    build_script_data = ["@@//bazel:libclang", "@@//bazel:clang_includes"] if name.endswith("-sys") else [],
+    build_script_data = ["@@//bazel:libclang", "@@//bazel:clang", "@@//bazel:clang_includes"] if name.endswith("-sys") else [],
     build_script_data_glob = ["**"],
     # Not the host's libclang: a remote executor's image has none.
     build_script_env = {"LIBCLANG_PATH": "$(execpath @@//bazel:libclang)"} if name.endswith("-sys") else {},
