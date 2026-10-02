@@ -28,7 +28,7 @@ jobs:
       - id: ref
         run: echo "ci-image=$(sed -n 's|^CI_IMAGE = "docker://\(.*\)"|\1|p' bazel/images.bzl)" >> "$GITHUB_OUTPUT"
       - if: github.event_name == 'push'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -49,7 +49,7 @@ jobs:
     # Pilot: every lane as Bazel tests, executed on BuildBuddy; this job only orchestrates.
     # Two jobs, not one run: Spinel master moves many times a day, and its lanes would hold back the gating result.
     name: all-rbe (${{ matrix.set }})
-    if: ${{ !(github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'simulate-fork'))) }}
+    if: ${{ !(github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository)) }}
     needs: images
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -67,7 +67,7 @@ jobs:
             filter: advisory
     steps:
       - uses: actions/checkout@v5
-      - uses: bazel-contrib/setup-bazel@0.15.0
+      - uses: bazel-contrib/setup-bazel@0.19.0
         with:
           bazelisk-cache: true
           repository-cache: true
@@ -95,7 +95,7 @@ jobs:
     # A fork's pull request sees no secrets, and a read-only key cannot upload remote execution's inputs:
     # it reads the cache main fills, and runs the misses here, in the executors' image.
     name: fork (${{ matrix.set }})
-    if: ${{ github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'simulate-fork')) }}
+    if: ${{ github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository) }}
     needs: images
     runs-on: ubuntu-latest
     container: ${{ needs.images.outputs.ci-image }}
