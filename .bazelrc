@@ -10,6 +10,8 @@ build:bb --remote_download_minimal
 build:bb --build_metadata=ROLE=CI
 
 # Locally, the emitted projects' tests run the host's toolchains (`--config=local`).
+# and the fixture's generator runs the host's Ruby.
+build:local --action_env=PATH
 test:local --test_env=PATH --test_env=HOME --test_env=CARGO_HOME --test_env=RUSTUP_HOME --test_env=RUSTUP_TOOLCHAIN --test_env=JAVA_HOME --test_env=GRADLE_USER_HOME
 
 # A pull request reads the cache with a read-only key and never writes to it,

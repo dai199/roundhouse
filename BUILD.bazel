@@ -57,14 +57,38 @@ filegroup(
     ),
 )
 
+# The blog fixture generated in Bazel from a pinned Rails: cached until the
+# script or the pin changes, so every lane downstream sees the same bytes.
+RAILS_VERSION = "8.1.4"
+
+genrule(
+    name = "real_blog_fixture",
+    outs = ["real-blog-fixture.tar"],
+    cmd = " && ".join([
+        "export HOME=$$PWD/$(RULEDIR)/home",
+        "gem install rails -v %s --no-document >/dev/null" % RAILS_VERSION,
+        "RAILS_NEW_VERSION=%s $(location scripts/create-blog) $(RULEDIR)/fx/real-blog >/dev/null" % RAILS_VERSION,
+        "(cd $(RULEDIR)/fx/real-blog && bundle install --quiet && bin/rails db:prepare >/dev/null)",
+        "rm -rf $(RULEDIR)/fx/real-blog/tmp $(RULEDIR)/fx/real-blog/log $(RULEDIR)/fx/real-blog/node_modules",
+        "python3 $(location //bazel:pack.py) $(RULEDIR)/fx/real-blog $@",
+    ]),
+    exec_properties = {
+        "container-image": "docker://ruby:3.4",
+        "network": "external",
+    },
+    tags = ["requires-network"],
+    tools = ["scripts/create-blog", "//bazel:pack.py"],
+)
+
 # One emit + one test per target: a test whose emitted project is
 # byte-identical to a cached run is not re-run.
 [genrule(
     name = "emit_blog_%s" % target,
-    srcs = [":real_blog"],
+    srcs = [":real_blog_fixture"],
     outs = ["blog-%s.tar" % target],
-    cmd = "$(location :roundhouse) --target %s -o $(RULEDIR)/blog-%s fixtures/real-blog >/dev/null && " % (target, target) +
-          "python3 $(location //bazel:pack.py) $(RULEDIR)/blog-%s $@" % target,
+    cmd = ("mkdir -p $(RULEDIR)/src-%s/real-blog && tar -xf $(location :real_blog_fixture) -C $(RULEDIR)/src-%s/real-blog && " % (target, target) +
+           "$(location :roundhouse) --target %s -o $(RULEDIR)/blog-%s $(RULEDIR)/src-%s/real-blog >/dev/null && " % (target, target, target) +
+           "python3 $(location //bazel:pack.py) $(RULEDIR)/blog-%s $@" % target),
     tools = [":roundhouse", "//bazel:pack.py"],
 ) for target in ["rust", "kotlin", "swift"]]
 
@@ -102,11 +126,11 @@ sh_test(
     name = "compare_rust_test",
     srcs = ["//bazel:compare_rust.sh"],
     args = [
-        "$(rootpath :real_blog_tar)",
+        "$(rootpath :real_blog_fixture)",
         "$(rootpath :emit_blog_rust)",
         "$(rootpath //tools/compare:roundhouse-compare)",
     ],
-    data = [":real_blog_tar", ":emit_blog_rust", "//tools/compare:roundhouse-compare"],
+    data = [":real_blog_fixture", ":emit_blog_rust", "//tools/compare:roundhouse-compare"],
     exec_properties = {
         "container-image": "docker://ruby:3.4",
         "network": "external",
@@ -151,7 +175,8 @@ TEST_DATA = glob(
 TEST_ENV = {"RUST_MIN_STACK": "33554432"}
 
 # Remotely, the suites run in an image with Ruby: some drive the emitted Ruby tree.
-UNIT_EXEC = {"container-image": "docker://ruby:3.4"}
+# `test.`: the image is for running the suite; compiling it stays on the C toolchain's platform.
+UNIT_EXEC = {"test.container-image": "docker://ruby:3.4"}
 
 rust_test(
     name = "lib_test",

@@ -81,19 +81,12 @@ jobs:
           grep -E 'INFO: [0-9]+ processes|Elapsed time|Critical Path' bazel-rbe.log >> "$GITHUB_STEP_SUMMARY"
 
   blog-rbe:
-    # Pilot: the blog lanes' tests executed on BuildBuddy, each in its toolchain's image.
+    # Pilot: the blog lanes on BuildBuddy end to end — the fixture is generated there too.
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
-      - uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: "3.4"
-      - name: Generate fixtures/real-blog
-        run: |
-          gem install rails --no-document
-          bin/rh fixture
       - uses: bazel-contrib/setup-bazel@0.15.0
         with:
           bazelisk-cache: true
