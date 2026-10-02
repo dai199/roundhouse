@@ -41,6 +41,13 @@ jobs:
           swift-version: '6.1'
       - name: Install libsqlite3-dev (Swift CSQLite systemLibrary)
         run: '"$GITHUB_WORKSPACE/scripts/ci-apt-install" libsqlite3-dev'
+      - name: Diagnose linker after toolchain installs
+        run: |
+          ls -l /usr/bin/ld* || true
+          which -a ld gcc || true
+          gcc -print-prog-name=ld || true
+          echo "PATH=$PATH"
+          env | grep -iE '^(COMPILER_PATH|LIBRARY_PATH|GCC_EXEC_PREFIX|LD_)' || true
       - uses: bazel-contrib/setup-bazel@0.15.0
         with:
           bazelisk-cache: true
