@@ -28,10 +28,12 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push roundhouse-ci-ruby
+      - name: Build and push the tag bazel/images.bzl names
         run: |
-          docker build -t ghcr.io/${{ github.repository_owner }}/roundhouse-ci-ruby:3.4 bazel/images/ruby
-          docker push ghcr.io/${{ github.repository_owner }}/roundhouse-ci-ruby:3.4
+          image=$(sed -n 's|^CI_IMAGE = "docker://\(.*\)"|\1|p' bazel/images.bzl)
+          if docker manifest inspect "$image" >/dev/null 2>&1; then echo "$image exists"; exit 0; fi
+          docker build -t "$image" bazel/images/ruby
+          docker push "$image"
 
   blog-rust:
     runs-on: ubuntu-latest

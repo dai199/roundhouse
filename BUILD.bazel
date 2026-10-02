@@ -2,6 +2,7 @@ load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//bazel:images.bzl", "CI_IMAGE")
 
 exports_files(["Cargo.toml", "Cargo.lock"])
 
@@ -134,7 +135,7 @@ sh_test(
     ],
     data = [":real_blog_fixture", ":emit_blog_rust", "//tools/compare:roundhouse-compare"],
     exec_properties = {
-        "container-image": "docker://ghcr.io/dai199/roundhouse-ci-ruby:3.4",
+        "container-image": CI_IMAGE,
         "network": "external",
     },
     tags = ["requires-network"],
@@ -181,7 +182,7 @@ TEST_ENV = {"RUST_MIN_STACK": "33554432"}
 
 # Remotely, the suites run in an image with Ruby: some drive the emitted Ruby tree.
 # `test.`: the image is for running the suite; compiling it stays on the C toolchain's platform.
-UNIT_EXEC = {"test.container-image": "docker://ghcr.io/dai199/roundhouse-ci-ruby:3.4"}
+UNIT_EXEC = {"test.container-image": CI_IMAGE}
 
 rust_test(
     name = "lib_test",
@@ -210,8 +211,6 @@ rust_test(
     deps = [":roundhouse_lib"] + all_crate_deps(normal = True, normal_dev = True),
     proc_macro_deps = all_crate_deps(proc_macro = True, proc_macro_dev = True),
 ) for f in glob(["tests/*.rs"])]
-
-CI_IMAGE = "docker://ghcr.io/dai199/roundhouse-ci-ruby:3.4"
 
 genrule(
     name = "asset_graph",
