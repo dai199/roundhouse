@@ -1,0 +1,46 @@
+name: Bazel pilot
+
+# Pilot for #273: build roundhouse, emit the blog to Rust, and run that
+# project's tests under Bazel, with BuildBuddy as the remote cache. A test
+# whose emitted project is byte-identical to a cached run is not re-run.
+on:
+  push:
+    branches: [bazel-pilot]
+  pull_request:
+    branches: [bazel-pilot]
+
+concurrency:
+  group: bazel-pilot-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  blog-rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+      - name: Generate fixtures/real-blog
+        run: |
+          gem install rails --no-document
+          bin/rh fixture
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+      - uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+      - name: bazel test //:blog_rust_test
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_ORG_API_KEY }}
+        run: |
+          # Not a hard requirement: a fork PR has no secrets, so it runs without the remote cache.
+          flags=()
+          if [ -n "$BUILDBUDDY_API_KEY" ]; then
+            flags=(--config=bb "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY")
+          fi
+          bazel test "${flags[@]}" //:blog_rust_test 2>&1 | tee bazel-test.log
+          grep -E '^//:blog_rust_test' bazel-test.log >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,77 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+exports_files(["Cargo.toml", "Cargo.lock"])
+
+# The files src/ embeds with include_str!/include_bytes!.
+EMBEDDED = glob([
+    "runtime/**",
+    "e2e/*.js",
+    "e2e/package-lock.json",
+])
+
+cargo_build_script(
+    name = "build_script",
+    srcs = ["build.rs"],
+    crate_root = "build.rs",
+    data = glob(["runtime/ruby/**", "runtime/spinel/**"]),
+    edition = "2024",
+)
+
+rust_library(
+    name = "roundhouse_lib",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/bin/**"]),
+    compile_data = EMBEDDED,
+    crate_name = "roundhouse",
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    deps = all_crate_deps(normal = True) + [":build_script"],
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+)
+
+rust_binary(
+    name = "roundhouse",
+    srcs = ["src/bin/roundhouse.rs"],
+    compile_data = EMBEDDED,
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    deps = [":roundhouse_lib"] + all_crate_deps(normal = True),
+)
+
+# The blog fixture is generated (bin/rh fixture), not checked in; its files are inputs here.
+filegroup(
+    name = "real_blog",
+    srcs = glob(
+        ["fixtures/real-blog/**"],
+        exclude = [
+            "fixtures/real-blog/tmp/**",
+            "fixtures/real-blog/log/**",
+            "fixtures/real-blog/storage/**",
+            "fixtures/real-blog/node_modules/**",
+            "fixtures/real-blog/.bundle/**",
+            "fixtures/real-blog/**/* *",
+        ],
+        allow_empty = True,
+    ),
+)
+
+genrule(
+    name = "emit_blog_rust",
+    srcs = [":real_blog"],
+    outs = ["blog-rust.tar"],
+    cmd = "$(location :roundhouse) --target rust -o $(RULEDIR)/blog-rust fixtures/real-blog >/dev/null && " +
+          "python3 $(location //bazel:pack.py) $(RULEDIR)/blog-rust $@",
+    tools = [":roundhouse", "//bazel:pack.py"],
+)
+
+sh_test(
+    name = "blog_rust_test",
+    srcs = ["//bazel:cargo_test.sh"],
+    args = ["$(location :emit_blog_rust)"],
+    data = [":emit_blog_rust"],
+    # Cargo resolves the emitted project's crates from the registry.
+    tags = ["requires-network", "no-remote-exec"],
+    timeout = "long",
+)

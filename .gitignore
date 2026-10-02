@@ -46,3 +46,6 @@
 /*-srv.err
 /bench/probes/
 /scratchpad/
+
+# Bazel pilot output trees
+/bazel-*

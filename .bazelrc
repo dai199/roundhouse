@@ -1,0 +1,13 @@
+common --enable_bzlmod
+build --incompatible_strict_action_env
+
+# BuildBuddy: `--config=bb` with BUILDBUDDY_API_KEY in the environment.
+build:bb --bes_results_url=https://app.buildbuddy.io/invocation/
+build:bb --bes_backend=grpcs://remote.buildbuddy.io
+build:bb --remote_cache=grpcs://remote.buildbuddy.io
+build:bb --remote_timeout=10m
+build:bb --remote_download_minimal
+build:bb --build_metadata=ROLE=CI
+
+# The emitted project's tests run the host's cargo.
+test --test_env=PATH --test_env=HOME --test_env=CARGO_HOME --test_env=RUSTUP_HOME --test_env=RUSTUP_TOOLCHAIN
