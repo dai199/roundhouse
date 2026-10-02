@@ -12,3 +12,15 @@ alias(
     actual = "@llvm_toolchain_llvm//:include",
     visibility = ["//visibility:public"],
 )
+
+# Linux only: a remote executor's libclang does not find clang's builtin headers on its own,
+# while on macOS adding them ahead of the SDK breaks <stdint.h>.
+genrule(
+    name = "bindgen_env",
+    outs = ["bindgen.env"],
+    cmd = select({
+        "@platforms//os:linux": "echo 'BINDGEN_EXTRA_CLANG_ARGS=-isystem $${pwd}/external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/19/include' > $@",
+        "//conditions:default": "touch $@",
+    }),
+    visibility = ["//visibility:public"],
+)
