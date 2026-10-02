@@ -762,6 +762,8 @@ pub(super) fn expand_enum_decl(
                 name: Symbol::from(name),
                 receiver: MethodReceiver::Instance,
                 params: Vec::new(),
+                unsupported_formals: None,
+                has_anonymous_block: false,
                 block_param: None,
                 body,
                 signature: None,
@@ -819,7 +821,7 @@ pub(super) fn expand_enum_decl(
                     args: vec![Expr::new(
                         span,
                         ExprNode::Lit {
-                            value: if reads_label { Literal::Str { value: label.clone() } } else { value },
+                            value: if reads_label { Literal::Str { value: all_labels.iter().find(|(_, stored)| stored == &value).map(|(canonical, _)| canonical.clone()).unwrap_or_else(|| label.clone()) } } else { value },
                         },
                     )],
                     block: None,
@@ -851,6 +853,8 @@ pub(super) fn expand_enum_decl(
             name: Symbol::from(crate::naming::pluralize_snake(&column)),
             receiver: MethodReceiver::Class,
             params: Vec::new(),
+            unsupported_formals: None,
+            has_anonymous_block: false,
             block_param: None,
             body: mapping_hash,
             signature: None,
@@ -1200,6 +1204,7 @@ pub(super) fn ingest_method(
 ) -> IngestResult<crate::dialect::MethodDef> {
     use crate::dialect::{MethodDef, MethodReceiver};
 
+    let formals = super::forwarding::parse(def);
     let name = Symbol::from(constant_id_str(&def.name()));
     // `def self.foo` / `def Post.foo` have explicit receivers; plain `def foo`
     // is an instance method.
@@ -1320,6 +1325,11 @@ pub(super) fn ingest_method(
         crate::dialect::Param::positional(Symbol::from(name))
     });
 
+    // Only full `...` or nameless `**` enters this canonical seam.
+    // Named rest/keyword-rest above and the separate block slot stay
+    // source-owned; no forwarding packet is expanded into local names.
+    params.extend(formals.anonymous.map(super::forwarding::AnonymousFormal::into_param));
+
     let body = match def.body() {
         Some(b) => ingest_expr(&b, file)?,
         None => Expr::new(Span::synthetic(), ExprNode::Seq { exprs: vec![] }),
@@ -1330,6 +1340,8 @@ pub(super) fn ingest_method(
         name,
         receiver,
         params,
+        unsupported_formals: formals.unsupported,
+        has_anonymous_block: formals.has_anonymous_block,
         body,
         signature: None,
         effects: EffectSet::pure(),
@@ -2053,7 +2065,8 @@ fn ty_of_column(t: &ColumnType) -> Ty {
         ColumnType::Float | ColumnType::Decimal { .. } => Ty::Float,
         ColumnType::String { .. } | ColumnType::Text => Ty::Str,
         ColumnType::Boolean => Ty::Bool,
-        ColumnType::Date | ColumnType::DateTime | ColumnType::Time => Ty::Time,
+        ColumnType::Date => Ty::Date,
+        ColumnType::DateTime | ColumnType::Time => Ty::Time,
         ColumnType::Binary => Ty::Str,
         // Rails exposes a schema-less JSON value here: it may be an
         // Array, Hash, scalar, or nil, so neither String nor one fixed
