@@ -68,12 +68,23 @@ filegroup(
     tools = [":roundhouse", "//bazel:pack.py"],
 ) for target in ["rust", "kotlin", "swift"]]
 
+# The image each target's toolchain comes from when the test runs on a remote executor.
+TEST_IMAGES = {
+    "rust": "docker://rust:1.98.1",
+    "kotlin": "docker://gradle:9.5.1-jdk21",
+    "swift": "docker://swift:6.1",
+}
+
 [sh_test(
     name = "blog_%s_test" % target,
     srcs = ["//bazel:test_%s.sh" % target],
     args = ["$(location :emit_blog_%s)" % target],
     data = [":emit_blog_%s" % target],
-    # The toolchains resolve the emitted project's dependencies from their registries.
-    tags = ["requires-network", "no-remote-exec"],
+    exec_properties = {
+        "container-image": TEST_IMAGES[target],
+        # The toolchains resolve the emitted project's dependencies from their registries.
+        "network": "external",
+    },
+    tags = ["requires-network"],
     timeout = "long",
 ) for target in ["rust", "kotlin", "swift"]]
