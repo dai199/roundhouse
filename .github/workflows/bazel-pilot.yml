@@ -1,6 +1,6 @@
 name: Bazel pilot
 
-# Pilot for #273: build roundhouse, emit the blog to Rust, and run that
+# Pilot for #273 — build roundhouse, emit the blog to Rust, and run that
 # project's tests under Bazel, with BuildBuddy as the remote cache. A test
 # whose emitted project is byte-identical to a cached run is not re-run.
 on:
