@@ -68,6 +68,26 @@ genrule(
     tools = ["scripts/create-blog", "//bazel:pack.py"],
 )
 
+genrule(
+    name = "store_fixture",
+    outs = ["store-fixture.tar"],
+    cmd = " && ".join([
+        "export HOME=$$PWD/$(RULEDIR)/home",
+        "export PATH=/usr/local/bundle/bin:$$PATH",
+        "gem install rails -v %s --no-document >/dev/null" % RAILS_VERSION,
+        "mkdir -p $(RULEDIR)/fx",
+        "(cd $(RULEDIR)/fx && RAILS_NEW_VERSION=%s $$OLDPWD/$(location scripts/create-store) store >/dev/null)" % RAILS_VERSION,
+        "rm -rf $(RULEDIR)/fx/store/tmp $(RULEDIR)/fx/store/log $(RULEDIR)/fx/store/storage $(RULEDIR)/fx/store/node_modules",
+        "python3 $(location //bazel:pack.py) $(RULEDIR)/fx/store $@",
+    ]),
+    exec_properties = {
+        "container-image": "docker://ruby:3.4",
+        "network": "external",
+    },
+    tags = ["requires-network"],
+    tools = ["scripts/create-store", "//bazel:pack.py"],
+)
+
 # What the test suites read from the repository, relative to its root.
 TEST_DATA = glob(
     [

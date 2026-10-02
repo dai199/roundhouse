@@ -48,18 +48,20 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5
-      - uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: "3.4"
-      - name: Generate fixtures (real-blog, store) the source-tree suites read
-        run: |
-          gem install rails --no-document
-          bin/rh fixture
-          (cd fixtures && ../scripts/create-store store)
       - uses: bazel-contrib/setup-bazel@0.15.0
         with:
           bazelisk-cache: true
           repository-cache: true
+      - name: Fixtures (real-blog, store) the source-tree suites read
+        # Not `bin/rh fixture` here: each run's fresh `rails new` differs in bytes, and every test reading it would miss the cache.
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_ORG_API_KEY }}
+        run: |
+          bazel build --config=rbe "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" --remote_download_toplevel \
+            //:real_blog_fixture //:store_fixture
+          mkdir -p fixtures/real-blog fixtures/store
+          tar -xf bazel-bin/real-blog-fixture.tar -C fixtures/real-blog
+          tar -xf bazel-bin/store-fixture.tar -C fixtures/store
       - name: bazel test --config=rbe //:all
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_ORG_API_KEY }}
