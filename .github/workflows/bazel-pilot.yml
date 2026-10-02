@@ -41,13 +41,6 @@ jobs:
           swift-version: '6.1'
       - name: Install libsqlite3-dev (Swift CSQLite systemLibrary)
         run: '"$GITHUB_WORKSPACE/scripts/ci-apt-install" libsqlite3-dev'
-      - name: Diagnose linker after toolchain installs
-        run: |
-          ls -l /usr/bin/ld* || true
-          which -a ld gcc || true
-          gcc -print-prog-name=ld || true
-          echo "PATH=$PATH"
-          env | grep -iE '^(COMPILER_PATH|LIBRARY_PATH|GCC_EXEC_PREFIX|LD_)' || true
       - uses: bazel-contrib/setup-bazel@0.15.0
         with:
           bazelisk-cache: true
@@ -57,9 +50,10 @@ jobs:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_ORG_API_KEY }}
         run: |
           # Not a hard requirement: a fork PR has no secrets, so it runs without the remote cache.
-          flags=()
+          # Not the job PATH: the Swift toolchain leads it, and the C toolchain autoconfiguration then resolves a linker that is not there.
+          flags=(--repo_env=PATH=/usr/local/bin:/usr/bin:/bin)
           if [ -n "$BUILDBUDDY_API_KEY" ]; then
-            flags=(--config=bb "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY")
+            flags+=(--config=bb "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY")
           fi
           bazel test "${flags[@]}" //:blog_rust_test //:blog_kotlin_test //:blog_swift_test 2>&1 | tee bazel-test.log
           grep -E '^//:blog_' bazel-test.log >> "$GITHUB_STEP_SUMMARY"
