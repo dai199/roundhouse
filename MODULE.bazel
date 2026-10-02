@@ -31,7 +31,11 @@ crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
     build_script_data = ["@@//bazel:libclang", "@@//bazel:clang_includes"] if name.endswith("-sys") else [],
     build_script_data_glob = ["**"],
     # Not the host's libclang: a remote executor's image has none.
-    build_script_env = {"LIBCLANG_PATH": "$(execpath @@//bazel:libclang)"} if name.endswith("-sys") else {},
+    build_script_env = {
+        "LIBCLANG_PATH": "$(execpath @@//bazel:libclang)",
+        # Not found from libclang alone on a remote executor: clang's own builtin headers (stddef.h).
+        "BINDGEN_EXTRA_CLANG_ARGS": "-isystem ${pwd}/external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/19/include",
+    } if name.endswith("-sys") else {},
     compile_data_glob = ["**"],
     crate = name,
     patch_args = ["-p1"],
