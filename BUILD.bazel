@@ -2,7 +2,7 @@ load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
-load("//bazel:images.bzl", "CI_IMAGE")
+load("//bazel:images.bzl", "CAMPFIRE_SHA", "CI_IMAGE")
 
 exports_files(["Cargo.toml", "Cargo.lock"])
 
@@ -272,4 +272,33 @@ sh_test(
     env = TEST_ENV,
     exec_properties = {"container-image": CI_IMAGE},
     timeout = "long",
+)
+
+genrule(
+    name = "campfire_src",
+    outs = ["once-campfire.tar.gz"],
+    cmd = "curl -fsSL https://codeload.github.com/basecamp/once-campfire/tar.gz/%s -o $@" % CAMPFIRE_SHA,
+    exec_properties = {"container-image": CI_IMAGE, "network": "external"},
+    tags = ["requires-network"],
+)
+
+genrule(
+    name = "campfire_emit_ruby",
+    srcs = [":campfire_src"],
+    outs = ["campfire-ruby.tar"],
+    cmd = ("mkdir -p $(RULEDIR)/campfire-src && tar -xzf $(location :campfire_src) -C $(RULEDIR)/campfire-src --strip-components=1 && " +
+           "$(location :roundhouse) --target ruby $(RULEDIR)/campfire-src -o $(RULEDIR)/campfire-ruby --allow-unsupported >/dev/null 2>&1 && " +
+           "python3 $(location //bazel:pack.py) $(RULEDIR)/campfire-ruby $@"),
+    exec_properties = {"container-image": CI_IMAGE},
+    tools = [":roundhouse", "//bazel:pack.py"],
+)
+
+sh_test(
+    name = "campfire_compare_test",
+    srcs = ["//bazel:campfire_compare.sh"],
+    args = ["$(rootpath :campfire_src)", "$(rootpath :campfire_emit_ruby)"],
+    data = [":campfire_src", ":campfire_emit_ruby"] + glob(["scripts/**", "runtime/**"]),
+    exec_properties = {"container-image": CI_IMAGE, "network": "external"},
+    tags = ["requires-network"],
+    timeout = "eternal",
 )

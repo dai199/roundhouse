@@ -1,0 +1,17 @@
+#!/bin/bash
+# scripts/campfire-compare's ruby lane, as ci.yml's campfire-compare job runs it:
+# Redis up, the Rails oracle prepared, the Bazel-built emit served beside it.
+# Usage: campfire_compare.sh CAMPFIRE_TAR EMIT_TAR
+set -euo pipefail
+campfire_tar="$PWD/$1"; emit_tar="$PWD/$2"
+work="${TEST_TMPDIR:-$(mktemp -d)}"
+export HOME="$work/home" PATH="/usr/local/bundle/bin:/usr/local/cargo/bin:$PATH"
+mkdir -p "$HOME" "$work/repo" "$work/campfire" "$work/emit"
+# Not the runfiles tree: the scripts write the oracle under the repository's build/.
+cp -RL scripts runtime "$work/repo/"
+tar -xzf "$campfire_tar" -C "$work/campfire" --strip-components=1
+tar -xf "$emit_tar" -C "$work/emit"
+redis-server --daemonize yes --save "" --appendonly no >/dev/null
+cd "$work/repo"
+scripts/campfire-oracle prepare --app "$work/campfire"
+scripts/campfire-compare --reuse "$work/emit" "$work/campfire"
