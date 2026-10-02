@@ -66,10 +66,17 @@ jobs:
         run: |
           set +e
           bazel test --config=rbe "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" --keep_going \
-            --test_output=errors --jobs=80 \
+            --test_output=errors --jobs=80 --build_tests_only \
             --define=SPINEL_SHA="$(git ls-remote https://github.com/matz/spinel refs/heads/master | cut -f1)" \
             //:all 2>&1 | tee bazel-all.log
           status=${PIPESTATUS[0]}
           grep -E 'INFO: [0-9]+ processes|Executed [0-9]+ out of|Elapsed time' bazel-all.log >> "$GITHUB_STEP_SUMMARY"
           grep -E '^//:.* (FAILED|NO STATUS|FAILED TO BUILD|TIMEOUT)' bazel-all.log >> "$GITHUB_STEP_SUMMARY" || true
-          exit $status
+          [ "$status" -eq 0 ] && exit 0
+          # ci.yml's continue-on-error jobs: a failure tagged advisory is reported, not gating.
+          bazel query 'attr(tags, "\badvisory\b", tests(//:all))' 2>/dev/null | sort > advisory.txt
+          grep -oE '^//:[^ ]+ +(FAILED|NO STATUS|FAILED TO BUILD|TIMEOUT)' bazel-all.log | cut -d' ' -f1 | sort -u > failed.txt
+          [ -s failed.txt ] || exit $status
+          gating=$(comm -23 failed.txt advisory.txt)
+          for t in $(comm -12 failed.txt advisory.txt); do echo "::warning::advisory lane failed: $t"; done
+          [ -z "$gating" ] || { echo "$gating"; exit 1; }

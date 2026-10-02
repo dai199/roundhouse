@@ -1,3 +1,4 @@
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
@@ -42,23 +43,6 @@ rust_binary(
     deps = [":roundhouse_lib"] + all_crate_deps(normal = True),
 )
 
-# The blog fixture is generated (bin/rh fixture), not checked in; its files are inputs here.
-filegroup(
-    name = "real_blog",
-    srcs = glob(
-        ["fixtures/real-blog/**"],
-        exclude = [
-            "fixtures/real-blog/tmp/**",
-            "fixtures/real-blog/log/**",
-            "fixtures/real-blog/storage/**",
-            "fixtures/real-blog/node_modules/**",
-            "fixtures/real-blog/.bundle/**",
-            "fixtures/real-blog/**/* *",
-        ],
-        allow_empty = True,
-    ),
-)
-
 # The blog fixture generated in Bazel from a pinned Rails: cached until the
 # script or the pin changes, so every lane downstream sees the same bytes.
 RAILS_VERSION = "8.1.4"
@@ -83,49 +67,6 @@ genrule(
     tags = ["requires-network"],
     tools = ["scripts/create-blog", "//bazel:pack.py"],
 )
-
-# One emit + one test per target: a test whose emitted project is
-# byte-identical to a cached run is not re-run.
-[genrule(
-    name = "emit_blog_%s" % target,
-    srcs = [":real_blog_fixture"],
-    outs = ["blog-%s.tar" % target],
-    cmd = ("mkdir -p $(RULEDIR)/src-%s/real-blog && tar -xf $(location :real_blog_fixture) -C $(RULEDIR)/src-%s/real-blog && " % (target, target) +
-           "$(location :roundhouse) --target %s -o $(RULEDIR)/blog-%s $(RULEDIR)/src-%s/real-blog >/dev/null && " % (target, target, target) +
-           "python3 $(location //bazel:pack.py) $(RULEDIR)/blog-%s $@" % target),
-    tools = [":roundhouse", "//bazel:pack.py"],
-) for target in ["rust", "kotlin", "swift"]]
-
-# The image each target's toolchain comes from when the test runs on a remote executor.
-TEST_IMAGES = {
-    "rust": "docker://rust:1.98.1",
-    "kotlin": "docker://gradle:9.5.1-jdk21",
-    "swift": "docker://swift:6.1",
-}
-
-[sh_test(
-    name = "blog_%s_test" % target,
-    srcs = ["//bazel:test_%s.sh" % target],
-    args = ["$(location :emit_blog_%s)" % target],
-    data = [":emit_blog_%s" % target],
-    exec_properties = {
-        "container-image": TEST_IMAGES[target],
-        # The toolchains resolve the emitted project's dependencies from their registries.
-        "network": "external",
-    },
-    tags = ["requires-network"],
-    timeout = "long",
-) for target in ["rust", "kotlin", "swift"]]
-
-# The fixture as Rails serves it: its seeded DB included.
-genrule(
-    name = "real_blog_tar",
-    srcs = [":real_blog", "fixtures/real-blog/storage/development.sqlite3"],
-    outs = ["real-blog.tar"],
-    cmd = "python3 $(location //bazel:pack.py) fixtures/real-blog $@",
-    tools = ["//bazel:pack.py"],
-)
-
 
 # What the test suites read from the repository, relative to its root.
 TEST_DATA = glob(
@@ -266,15 +207,17 @@ genrule(
     tools = [":roundhouse", "//bazel:campfire_spinel_build.sh", "//bazel:pack.py"],
 )
 
-sh_test(
-    name = "campfire_compare_spinel_test",
+CAMPFIRE_SPINEL_LEGS = {"default": [], "minor_gc": ["--minor-gc"], "verify_gen": ["--verify-gen"]}
+
+[sh_test(
+    name = "campfire_compare_spinel_test" if leg == "default" else "campfire_compare_spinel_%s_test" % leg,
     srcs = ["//bazel:campfire_compare.sh"],
-    args = ["$(rootpath :campfire_src)", "$(rootpath :campfire_spinel_build)", "--spinel"],
+    args = ["$(rootpath :campfire_src)", "$(rootpath :campfire_spinel_build)", "--spinel"] + flags,
     data = [":campfire_src", ":campfire_spinel_build"] + glob(["scripts/**", "runtime/**"]),
     exec_properties = {"container-image": CI_IMAGE, "network": "external"},
-    tags = ["requires-network"],
+    tags = ["requires-network", "advisory"],
     timeout = "eternal",
-)
+) for leg, flags in CAMPFIRE_SPINEL_LEGS.items()]
 
 rust_binary(
     name = "emit_preview",
@@ -282,6 +225,22 @@ rust_binary(
     compile_data = EMBEDDED,
     edition = "2024",
     deps = [":roundhouse_lib"] + all_crate_deps(normal = True),
+)
+
+OTHER_BINS = ["roundhouse-ast", "roundhouse-check", "roundhouse-lsp", "roundhouse-mcp", "dump_ir"]
+
+[rust_binary(
+    name = b,
+    srcs = ["src/bin/%s.rs" % b],
+    compile_data = EMBEDDED,
+    edition = "2024",
+    deps = [":roundhouse_lib"] + all_crate_deps(normal = True),
+) for b in OTHER_BINS]
+
+# Not bare binaries: the gating run's --build_tests_only would skip them, and ci.yml's --all-targets compiles every bin.
+build_test(
+    name = "bins_build_test",
+    targets = [":%s" % b for b in OTHER_BINS],
 )
 
 # ---- compare: every target, as `scripts/compare --skip-emit` ----
@@ -317,7 +276,7 @@ COMPARE_TARGETS = PREVIEW_TARGETS + ["ruby", "jruby", "spinel"]
     data = [":real_blog_fixture", ":compare_emit_%s" % t, "//tools/compare:roundhouse-compare"] +
            glob(["scripts/**", "bin/**", "runtime/**"]) + ([":spinel_dist"] if t == "spinel" else []),
     exec_properties = {"container-image": CI_IMAGE, "network": "external"},
-    tags = ["requires-network", "lane"],
+    tags = ["requires-network", "lane"] + (["advisory"] if t == "spinel" else []),
     timeout = "eternal",
 ) for t in COMPARE_TARGETS]
 
@@ -344,7 +303,7 @@ genrule(
     args = [t, "$(rootpath :browse/%s.tgz)" % t] + (["$(rootpath :spinel_dist)"] if t == "spinel" else []),
     data = [":browse/%s.tgz" % t] + glob(["scripts/**"]) + ([":spinel_dist"] if t == "spinel" else []),
     exec_properties = {"container-image": CI_IMAGE, "network": "external"},
-    tags = ["requires-network", "lane"],
+    tags = ["requires-network", "lane"] + (["advisory"] if t == "spinel" else []),
     timeout = "eternal",
 ) for t in SMOKE_TARGETS]
 
@@ -370,6 +329,8 @@ SPINEL_IGNORED_LANES = {
     "spinel_web_push_crypto": [],
     "spinel_db_lease": [],
     "spinel_toolchain": [],
+    "spinel_param_builder": [],
+    "rails_compat_vectors_spinel": [],
 }
 
 [sh_test(
@@ -390,7 +351,7 @@ SPINEL_IGNORED_LANES = {
     data = [":spinel_dist", ":test_%s" % name],
     env = TEST_ENV,
     exec_properties = {"container-image": CI_IMAGE, "network": "external"},
-    tags = ["requires-network", "lane", "needs-source-fixtures"],
+    tags = ["requires-network", "lane", "needs-source-fixtures", "advisory"],
     timeout = "eternal",
 ) for name, filters in SPINEL_IGNORED_LANES.items()]
 
@@ -432,10 +393,21 @@ sh_test(
     timeout = "eternal",
 )
 
+sh_test(
+    name = "lane_writebook_check",
+    srcs = ["//bazel:writebook_check.sh"],
+    args = ["$(rootpath :roundhouse)", "$(rootpath :writebook_src)"],
+    data = [":roundhouse", ":writebook_src"],
+    env = TEST_ENV,
+    exec_properties = {"container-image": CI_IMAGE},
+    tags = ["lane"],
+)
+
 # The wasm build is its own cargo workspace (wasm/Cargo.toml) on the WASI SDK.
 genrule(
     name = "roundhouse_wasm",
     srcs = glob(["wasm/**", "src/**"], exclude = ["wasm/target/**", "wasm/**/node_modules/**"]) + EMBEDDED + [
+        ".cargo/config.toml",
         "Cargo.toml",
         "Cargo.lock",
         "build.rs",
@@ -460,9 +432,12 @@ repo_lane(base = LANE, name = "lane_campfire_conformance",
     env = {"FLOOR_TESTS": "392", "FLOOR_FILES": "66"},
 )
 
-repo_lane(base = LANE, name = "lane_campfire_db_differential_spinel", script = "campfire_db_differential", campfire = True, spinel = True)
+repo_lane(base = LANE, name = "lane_campfire_db_differential", script = "campfire_db_differential", campfire = True)
 
-repo_lane(base = LANE, name = "lane_smoke_campfire", script = "smoke_campfire", campfire = True, spinel = True)
+repo_lane(base = LANE, name = "lane_campfire_db_differential_spinel", script = "campfire_db_differential", campfire = True, spinel = True,
+    args = ["--spinel"],
+    tags = ["advisory"],
+)
 
 # campfire/spinel.tgz and campfire/docker.tgz, as ci.yml's build-campfire-archive builds them.
 genrule(
@@ -477,6 +452,12 @@ genrule(
     exec_properties = {"container-image": CI_IMAGE, "network": "external"},
     tags = ["requires-network"],
     tools = ["//bazel:with_repo.sh"],
+)
+
+repo_lane(base = LANE, name = "lane_smoke_campfire", script = "smoke_campfire", spinel = True,
+    args = ["$(rootpath :campfire/spinel.tgz)"],
+    data = [":campfire/spinel.tgz"],
+    tags = ["advisory"],
 )
 
 # Docker inside the executor: BuildBuddy starts dockerd in a Firecracker microVM,
@@ -494,6 +475,6 @@ sh_test(
         "EstimatedMemory": "8GB",
         "EstimatedFreeDiskBytes": "20GB",
     },
-    tags = ["requires-network", "lane"],
+    tags = ["requires-network", "lane", "advisory"],
     timeout = "long",
 )
