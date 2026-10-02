@@ -134,7 +134,7 @@ sh_test(
     ],
     data = [":real_blog_fixture", ":emit_blog_rust", "//tools/compare:roundhouse-compare"],
     exec_properties = {
-        "container-image": "docker://ruby:3.4",
+        "container-image": "docker://ghcr.io/dai199/roundhouse-ci-ruby:3.4",
         "network": "external",
     },
     tags = ["requires-network"],
