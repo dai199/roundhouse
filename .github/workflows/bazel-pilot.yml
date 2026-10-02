@@ -48,7 +48,7 @@ jobs:
       - name: bazel test (rust, kotlin, swift)
         env:
           BUILDBUDDY_API_KEY: ${{ github.event_name == 'push' && secrets.BUILDBUDDY_ORG_API_KEY || '' }}
-          BUILDBUDDY_READONLY_API_KEY: ${{ vars.BUILDBUDDY_READONLY_API_KEY }}
+          BUILDBUDDY_READONLY_API_KEY: ${{ vars.BUILDBUDDY_READONLY_API_KEY || secrets.BUILDBUDDY_READONLY_API_KEY }}
         run: |
           # Not a hard requirement: a fork PR has no secrets, so it runs without the remote cache.
           # Not the job PATH: the Swift toolchain leads it, and the C toolchain autoconfiguration then resolves a linker that is not there.
