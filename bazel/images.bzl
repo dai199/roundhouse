@@ -4,7 +4,7 @@
 CI_IMAGE = "docker://ghcr.io/dai199/roundhouse-ci-all:v5"
 
 # The docker lane's Firecracker VM image (bazel/images/dind/Dockerfile).
-DIND_IMAGE = "docker://ghcr.io/dai199/roundhouse-ci-dind:v1"
+DIND_IMAGE = "docker://ghcr.io/dai199/roundhouse-ci-dind:v2"
 
 # once-campfire at the commit ci.yml pins.
 CAMPFIRE_SHA = "90b330024dec3e757c79b6a7e6568f93da8e3148"
