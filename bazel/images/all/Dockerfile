@@ -1,7 +1,7 @@
 # One image for every lane the remote executors run: Ruby + Rails's needs,
 # Rust for roundhouse's emitted Rust, and each target's toolchain at the
 # version ci.yml pins. Built from the repository root (the scaffold Gemfile). Bazel runs actions with PATH=/bin:/usr/bin:/usr/local/bin,
-# so every toolchain's commands are linked into /usr/local/bin.
+# so every toolchain's commands are linked into /usr/local/bin. Each ENV here is also declared in .bazelrc's image-env.
 FROM ruby:3.4
 
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
