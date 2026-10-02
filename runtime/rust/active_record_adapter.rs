@@ -45,3 +45,4 @@ pub trait ActiveRecordAdapter: Send + Sync {
     fn delete_all(&self, table_name: String);
     fn truncate(&self, table_name: String);
 }
+// pilot probe: changes the emitted Rust
