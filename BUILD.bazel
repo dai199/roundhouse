@@ -400,6 +400,15 @@ REPO_LANE_DATA = TEST_DATA + ["//bazel:shim", ":roundhouse", ":emit_preview", "/
 
 LANE = {"data": REPO_LANE_DATA, "env": TEST_ENV}
 
+# What the campfire archive lanes read: a Firecracker VM syncs every input, so the whole test data set times out.
+LANE_SMALL = {
+    "data": glob(["scripts/**", "runtime/**", "e2e/**", "bin/**"], exclude = ["**/node_modules/**"]) + [
+        "//bazel:shim",
+        ":roundhouse",
+    ],
+    "env": TEST_ENV,
+}
+
 repo_lane(base = LANE, name = "lane_store_check", script = "store_check")
 
 repo_lane(base = LANE, name = "lane_browser_smoke_typescript", script = "browser_smoke_typescript")
@@ -456,9 +465,16 @@ repo_lane(base = LANE, name = "lane_campfire_db_differential_spinel", script = "
 repo_lane(base = LANE, name = "lane_smoke_campfire", script = "smoke_campfire", campfire = True, spinel = True)
 
 # Docker inside the executor: BuildBuddy starts a dockerd in a Firecracker microVM on request.
-repo_lane(base = LANE, name = "lane_smoke_campfire_docker",
+repo_lane(
+    base = LANE_SMALL,
+    name = "lane_smoke_campfire_docker",
     script = "smoke_campfire_docker",
     campfire = True,
     spinel = True,
-    exec_properties = {"workload-isolation-type": "firecracker", "init-dockerd": "true"},
+    exec_properties = {
+        "workload-isolation-type": "firecracker",
+        "init-dockerd": "true",
+        "EstimatedMemory": "8GB",
+        "EstimatedFreeDiskBytes": "20GB",
+    },
 )
