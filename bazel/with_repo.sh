@@ -2,12 +2,13 @@
 # Runs a lane's command from a writable copy of the repository, with the
 # Bazel-built roundhouse binaries standing in for `cargo run --bin`, and the
 # spinel toolchain on PATH when one is given.
-# Usage: with_repo.sh [--spinel DIST_TAR] [--campfire SRC_TAR] -- COMMAND...
+# Usage: with_repo.sh [--bin BINARY] [--spinel DIST_TAR] [--campfire SRC_TAR] -- COMMAND...
 set -euo pipefail
 work="${TEST_TMPDIR:-$(mktemp -d)}"; repo="$work/repo"
 export HOME="$work/home"; mkdir -p "$HOME" "$repo" "$work/bins"
 while [[ "$1" != -- ]]; do
   case "$1" in
+    --bin) cp "$PWD/$2" "$work/bins/"; shift 2 ;;
     --spinel)
       mkdir -p "$work/spinel-dist"; tar -xf "$PWD/$2" -C "$work/spinel-dist"
       chmod +x "$work/spinel-dist/spinel" "$work/spinel-dist/spin" "$work/spinel-dist/spinel_rbs_extract"

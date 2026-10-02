@@ -464,17 +464,36 @@ repo_lane(base = LANE, name = "lane_campfire_db_differential_spinel", script = "
 
 repo_lane(base = LANE, name = "lane_smoke_campfire", script = "smoke_campfire", campfire = True, spinel = True)
 
-# Docker inside the executor: BuildBuddy starts a dockerd in a Firecracker microVM on request.
-repo_lane(
-    base = LANE_SMALL,
+# campfire/spinel.tgz and campfire/docker.tgz, as ci.yml's build-campfire-archive builds them.
+genrule(
+    name = "campfire_archives",
+    srcs = [":spinel_dist", ":campfire_src", ":roundhouse", "//bazel:shim"] +
+           glob(["scripts/**", "runtime/**", "e2e/**", "bin/**"], exclude = ["**/node_modules/**"]),
+    outs = ["campfire/spinel.tgz", "campfire/docker.tgz"],
+    cmd = ("out=$$PWD/$(RULEDIR)/campfire && mkdir -p $$out && " +
+           "$(location //bazel:with_repo.sh) --bin $(location :roundhouse) --spinel $(location :spinel_dist) " +
+           "--campfire $(location :campfire_src) -- " +
+           "'scripts/build-campfire-archive --out _site \"$$CAMPFIRE_APP\" && cp _site/campfire/spinel.tgz _site/campfire/docker.tgz '$$out/"),
+    exec_properties = {"container-image": CI_IMAGE, "network": "external"},
+    tags = ["requires-network"],
+    tools = ["//bazel:with_repo.sh"],
+)
+
+# Docker inside the executor: BuildBuddy starts dockerd in a Firecracker microVM,
+# booted from Docker's own small image (the all-toolchains one takes too long to boot).
+sh_test(
     name = "lane_smoke_campfire_docker",
-    script = "smoke_campfire_docker",
-    campfire = True,
-    spinel = True,
+    srcs = ["//bazel:lanes/docker_smoke.sh"],
+    args = ["$(rootpath :campfire/docker.tgz)"],
+    data = [":campfire/docker.tgz"],
     exec_properties = {
+        "container-image": "docker://docker:27-dind",
         "workload-isolation-type": "firecracker",
         "init-dockerd": "true",
+        "network": "external",
         "EstimatedMemory": "8GB",
         "EstimatedFreeDiskBytes": "20GB",
     },
+    tags = ["requires-network", "lane"],
+    timeout = "long",
 )
