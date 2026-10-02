@@ -118,7 +118,9 @@ jobs:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_ORG_API_KEY }}
         run: |
           bazel test --config=rbe "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" --nocache_test_results \
-            //:blog_rust_test //:blog_kotlin_test //:blog_swift_test //:compare_rust_test //:smoke_rust_test 2>&1 | tee bazel-rbe-test.log
+            --define=SPINEL_SHA="$(git ls-remote https://github.com/matz/spinel refs/heads/master | cut -f1)" \
+            //:blog_rust_test //:blog_kotlin_test //:blog_swift_test //:compare_rust_test //:smoke_rust_test \
+            //:framework_tests_spinel 2>&1 | tee bazel-rbe-test.log
           grep -E '^//:|INFO: [0-9]+ processes' bazel-rbe-test.log >> "$GITHUB_STEP_SUMMARY"
 
   unit-rbe:

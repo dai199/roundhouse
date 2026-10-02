@@ -27,3 +27,4 @@ build:rbe --remote_executor=grpcs://remote.buildbuddy.io
 build:rbe --platforms=@toolchains_buildbuddy//platforms:linux_x86_64
 build:rbe --extra_execution_platforms=@toolchains_buildbuddy//platforms:linux_x86_64
 build:rbe --jobs=50
+build --define=SPINEL_SHA=master

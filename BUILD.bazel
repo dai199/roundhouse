@@ -253,3 +253,23 @@ genrule(
     tags = ["requires-network"],
     timeout = "long",
 ) for t in SMOKE_TARGETS]
+
+# matz/spinel at the commit `--define=SPINEL_SHA=…` names (the workflow resolves master).
+genrule(
+    name = "spinel_dist",
+    outs = ["spinel-dist.tar"],
+    cmd = "$(location //bazel:spinel_dist.sh) $(SPINEL_SHA) $@ $(location //bazel:pack.py)",
+    exec_properties = {"container-image": CI_IMAGE, "network": "external"},
+    tags = ["requires-network"],
+    tools = ["//bazel:spinel_dist.sh", "//bazel:pack.py"],
+)
+
+sh_test(
+    name = "framework_tests_spinel",
+    srcs = ["//bazel:with_spinel.sh"],
+    args = ["$(rootpath :spinel_dist)", "$(rootpath :test_framework_tests_spinel)"],
+    data = [":spinel_dist", ":test_framework_tests_spinel"],
+    env = TEST_ENV,
+    exec_properties = {"container-image": CI_IMAGE},
+    timeout = "long",
+)
