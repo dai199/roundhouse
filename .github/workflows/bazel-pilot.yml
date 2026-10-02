@@ -29,11 +29,23 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.98.1
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.1'
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: '6.1'
+      - name: Install libsqlite3-dev (Swift CSQLite systemLibrary)
+        run: '"$GITHUB_WORKSPACE/scripts/ci-apt-install" libsqlite3-dev'
       - uses: bazel-contrib/setup-bazel@0.15.0
         with:
           bazelisk-cache: true
           repository-cache: true
-      - name: bazel test //:blog_rust_test
+      - name: bazel test (rust, kotlin, swift)
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_ORG_API_KEY }}
         run: |
@@ -42,5 +54,5 @@ jobs:
           if [ -n "$BUILDBUDDY_API_KEY" ]; then
             flags=(--config=bb "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY")
           fi
-          bazel test "${flags[@]}" //:blog_rust_test 2>&1 | tee bazel-test.log
-          grep -E '^//:blog_rust_test' bazel-test.log >> "$GITHUB_STEP_SUMMARY"
+          bazel test "${flags[@]}" //:blog_rust_test //:blog_kotlin_test //:blog_swift_test 2>&1 | tee bazel-test.log
+          grep -E '^//:blog_' bazel-test.log >> "$GITHUB_STEP_SUMMARY"

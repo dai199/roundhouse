@@ -57,21 +57,23 @@ filegroup(
     ),
 )
 
-genrule(
-    name = "emit_blog_rust",
+# One emit + one test per target: a test whose emitted project is
+# byte-identical to a cached run is not re-run.
+[genrule(
+    name = "emit_blog_%s" % target,
     srcs = [":real_blog"],
-    outs = ["blog-rust.tar"],
-    cmd = "$(location :roundhouse) --target rust -o $(RULEDIR)/blog-rust fixtures/real-blog >/dev/null && " +
-          "python3 $(location //bazel:pack.py) $(RULEDIR)/blog-rust $@",
+    outs = ["blog-%s.tar" % target],
+    cmd = "$(location :roundhouse) --target %s -o $(RULEDIR)/blog-%s fixtures/real-blog >/dev/null && " % (target, target) +
+          "python3 $(location //bazel:pack.py) $(RULEDIR)/blog-%s $@" % target,
     tools = [":roundhouse", "//bazel:pack.py"],
-)
+) for target in ["rust", "kotlin", "swift"]]
 
-sh_test(
-    name = "blog_rust_test",
-    srcs = ["//bazel:cargo_test.sh"],
-    args = ["$(location :emit_blog_rust)"],
-    data = [":emit_blog_rust"],
-    # Cargo resolves the emitted project's crates from the registry.
+[sh_test(
+    name = "blog_%s_test" % target,
+    srcs = ["//bazel:test_%s.sh" % target],
+    args = ["$(location :emit_blog_%s)" % target],
+    data = [":emit_blog_%s" % target],
+    # The toolchains resolve the emitted project's dependencies from their registries.
     tags = ["requires-network", "no-remote-exec"],
     timeout = "long",
-)
+) for target in ["rust", "kotlin", "swift"]]
