@@ -155,8 +155,13 @@ rust_test(
         "CARGO_BIN_EXE_roundhouse": "$(rootpath :roundhouse)",
         # Not the compile sandbox: the suites join repo paths onto this, and they run from the runfiles root.
         "CARGO_MANIFEST_DIR": ".",
+        "CARGO": "cargo",
     },
-    compile_data = EMBEDDED + glob(["tests/**"], exclude = ["tests/**/*.rs"]),
+    # The checked-in files suites include at compile time; not the generated fixtures, which only the runs read.
+    compile_data = EMBEDDED + glob(["tests/**"], exclude = ["tests/**/*.rs"]) + ["build.rs"] + glob(
+        ["fixtures/**"],
+        exclude = ["fixtures/real-blog/**", "fixtures/store/**", "**/* *"],
+    ),
     env = TEST_ENV,
     exec_properties = UNIT_EXEC,
     tags = ["unit"],

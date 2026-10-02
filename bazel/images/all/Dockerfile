@@ -16,11 +16,13 @@ COPY runtime/spinel/scaffold/Gemfile runtime/spinel/scaffold/Gemfile.lock /opt/s
 RUN cd /opt/scaffold && bundle install --quiet
 
 RUN gem install rails-html-sanitizer sqlite3 puma nio4r websocket-driver rack bcrypt ruby-vips \
-      concurrent-ruby net-http-persistent web-push --no-document
+      concurrent-ruby net-http-persistent web-push --no-document \
+ && gem install activerecord -v '~> 8.1.0' --no-document
 
 ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
 RUN curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal --default-toolchain 1.98.1 \
  && /usr/local/cargo/bin/rustup target add wasm32-wasip1 \
+ && /usr/local/cargo/bin/rustup component add rustfmt clippy \
  && ln -s /usr/local/cargo/bin/* /usr/local/bin/
 RUN mkdir -p /opt/wasi-sdk && curl -fsSL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-33/wasi-sdk-33.0-x86_64-linux.tar.gz \
       | tar -xz -C /opt/wasi-sdk --strip-components=1

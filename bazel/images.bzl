@@ -1,7 +1,7 @@
 """The remote executors' CI image; bump the tag whenever bazel/images/all/Dockerfile or the scaffold Gemfile it bundles changes."""
 
 # Not a moving tag: an executor caches an image by name and keeps running the stale one.
-CI_IMAGE = "docker://ghcr.io/dai199/roundhouse-ci-all:v5"
+CI_IMAGE = "docker://ghcr.io/dai199/roundhouse-ci-all:v6"
 
 # The docker lane's Firecracker VM image (bazel/images/dind/Dockerfile).
 DIND_IMAGE = "docker://ghcr.io/dai199/roundhouse-ci-dind:v2"
