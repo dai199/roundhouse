@@ -11,10 +11,10 @@ on:
   workflow_dispatch:
     inputs:
       key:
-        description: "org: the read+write key; cas: a CAS-only key, as a fork's PR would hold"
+        description: "org: the read+write key; cas: a CAS-only key on RBE; local: the fork job (read-only cache, run on Actions)"
         default: org
         type: choice
-        options: [org, cas]
+        options: [org, cas, local]
 
 concurrency:
   group: bazel-pilot-${{ github.ref }}
@@ -59,7 +59,7 @@ jobs:
     # Pilot: every lane as Bazel tests, executed on BuildBuddy; this job only orchestrates.
     # Two jobs, not one run: Spinel master moves many times a day, and its lanes would hold back the gating result.
     name: all-rbe (${{ matrix.set }})
-    if: ${{ !(github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository)) }}
+    if: ${{ !(github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository)) && inputs.key != 'local' }}
     needs: images
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -105,7 +105,7 @@ jobs:
     # A fork's pull request sees no secrets, and a read-only key cannot upload remote execution's inputs:
     # it reads the cache main fills, and runs the misses here, in the executors' image.
     name: fork (${{ matrix.set }})
-    if: ${{ github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository) }}
+    if: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository)) || inputs.key == 'local' }}
     needs: images
     runs-on: ubuntu-latest
     container: ${{ needs.images.outputs.ci-image }}

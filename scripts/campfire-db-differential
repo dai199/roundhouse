@@ -27,6 +27,7 @@
 #      (tests/db_differential/rollback.rb) — can someone go back to Rails?
 #
 # Usage:  scripts/campfire-db-differential [--spinel] [--keep] [--reuse DIR]
+#         scripts/campfire-db-differential [--spinel] --emit-only DIR   (step 3's transpile alone)
 #
 # Requires the Rails oracle at build/campfire-oracle (scripts/campfire-oracle
 # prepare) and sqlite3. Exit status: nonzero when a table differs, the
@@ -41,12 +42,14 @@ ORACLE="$REPO_ROOT/build/campfire-oracle"
 LANE=ruby
 KEEP=0
 REUSE=""
+EMIT_ONLY=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --spinel) LANE=spinel; shift ;;
         --keep)   KEEP=1; shift ;;
         --reuse)  REUSE="$2"; shift 2 ;;
+        --emit-only) EMIT_ONLY="$2"; shift 2 ;;
         -h|--help) sed -n '2,35p' "$0"; exit 0 ;;
         *) APP="$1"; shift ;;
     esac
@@ -55,6 +58,26 @@ done
 step() { printf '\n\033[1;34m==>\033[0m %s\n' "$1"; }
 fail() { printf '\033[1;31m%s\033[0m\n' "$1"; }
 die()  { fail "$1"; exit 1; }
+
+transpile() {   # transpile OUT: campfire + the overlay, into OUT
+    step "transpiling campfire + the scenario overlay (target: $LANE)"
+    rsync -a --exclude=.git --exclude=/storage --exclude=/tmp --exclude=/log --exclude=node_modules \
+        "$APP/" "$WORK/app/"
+    ruby "$REPO_ROOT/tests/db_differential/overlay.rb" "$WORK/app"
+    (cd "$REPO_ROOT" && cargo run --quiet --bin roundhouse -- \
+        --target "$LANE" "$WORK/app" -o "$1" --allow-unsupported) 2>"$WORK/transpile.log" | tail -1
+    if grep -q "differential_scenarios_controller.*error\[" "$WORK/transpile.log"; then
+        grep "differential_scenarios_controller.*error\[" "$WORK/transpile.log"
+        die "the scenario itself does not transpile"
+    fi
+}
+
+if [[ -n "$EMIT_ONLY" ]]; then
+    WORK="$(mktemp -d -t roundhouse-campfire-db-differential.XXXXXX)"
+    trap 'rm -rf "$WORK"' EXIT
+    transpile "$EMIT_ONLY"
+    exit 0
+fi
 
 [[ -f "$ORACLE/oracle.json" ]] || die "no oracle at $ORACLE — run scripts/campfire-oracle prepare first"
 command -v sqlite3 >/dev/null || die "sqlite3 not on PATH"
@@ -90,17 +113,8 @@ if [[ -n "$REUSE" ]]; then
     OUT="$REUSE"
     step "reusing emit at $OUT"
 else
-    step "transpiling campfire + the scenario overlay (target: $LANE)"
-    rsync -a --exclude=.git --exclude=/storage --exclude=/tmp --exclude=/log --exclude=node_modules \
-        "$APP/" "$WORK/app/"
-    ruby "$REPO_ROOT/tests/db_differential/overlay.rb" "$WORK/app"
     OUT="$WORK/emit"
-    (cd "$REPO_ROOT" && cargo run --quiet --bin roundhouse -- \
-        --target "$LANE" "$WORK/app" -o "$OUT" --allow-unsupported) 2>"$WORK/transpile.log" | tail -1
-    if grep -q "differential_scenarios_controller.*error\[" "$WORK/transpile.log"; then
-        grep "differential_scenarios_controller.*error\[" "$WORK/transpile.log"
-        die "the scenario itself does not transpile"
-    fi
+    transpile "$OUT"
 fi
 
 # Hold jobs: nothing in the scenario may run a push or webhook delivery.

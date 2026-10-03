@@ -485,10 +485,41 @@ sh_test(
     timeout = "eternal",
 )
 
-repo_lane(base = LANE, name = "lane_campfire_db_differential", script = "campfire_db_differential", campfire = True)
+# The Rails side of campfire's comparisons: prepared once per campfire pin and scripts, not per run.
+genrule(
+    name = "campfire_oracle",
+    srcs = [":campfire_src"] + glob(["scripts/**"]),
+    outs = ["campfire-oracle.tar"],
+    cmd = "$(location //bazel:campfire_oracle.sh) $(location :campfire_src) $(location //bazel:pack.py) $@",
+    exec_properties = {"container-image": CI_IMAGE, "network": "external"},
+    tags = ["requires-network"],
+    tools = ["//bazel:campfire_oracle.sh", "//bazel:pack.py"],
+)
+
+genrule(
+    name = "campfire_db_diff_emit",
+    srcs = [":campfire_src", "//bazel:shim"] + glob(["scripts/**", "tests/db_differential/**"]),
+    outs = ["campfire-db-diff-emit.tar"],
+    cmd = ("$(location //bazel:campfire_db_diff_emit.sh) $(location :roundhouse) $(location :campfire_src) " +
+           "$(location //bazel:pack.py) $@"),
+    exec_properties = {"container-image": CI_IMAGE},
+    tools = [":roundhouse", "//bazel:campfire_db_diff_emit.sh", "//bazel:pack.py"],
+)
+
+# Only what the run reads: the emit and the oracle as bytes, so an unchanged emit reuses the result.
+LANE_CAMPFIRE_RUN = {
+    "data": glob(["scripts/**", "tests/db_differential/**"]) + ["//bazel:shim"],
+    "env": TEST_ENV,
+}
+
+repo_lane(base = LANE_CAMPFIRE_RUN, name = "lane_campfire_db_differential", script = "campfire_db_differential", campfire = True,
+    args = ["$(rootpath :campfire-oracle.tar)", "$(rootpath :campfire-db-diff-emit.tar)"],
+    data = [":campfire-oracle.tar", ":campfire-db-diff-emit.tar"],
+)
 
 repo_lane(base = LANE, name = "lane_campfire_db_differential_spinel", script = "campfire_db_differential", campfire = True, spinel = True,
-    args = ["--spinel"],
+    args = ["$(rootpath :campfire-oracle.tar)", "--", "--spinel"],
+    data = [":campfire-oracle.tar"],
     tags = ["advisory"],
 )
 
