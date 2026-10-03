@@ -8,6 +8,13 @@ on:
     branches: [bazel-pilot]
   pull_request:
     branches: [bazel-pilot]
+  workflow_dispatch:
+    inputs:
+      key:
+        description: "org: the read+write key; cas: a CAS-only key, as a fork's PR would hold"
+        default: org
+        type: choice
+        options: [org, cas]
 
 concurrency:
   group: bazel-pilot-${{ github.ref }}
@@ -58,8 +65,8 @@ jobs:
     timeout-minutes: 120
     continue-on-error: ${{ matrix.set == 'advisory' }}
     env:
-      BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_ORG_API_KEY }}
-      BB_CONFIG: rbe
+      BUILDBUDDY_API_KEY: ${{ inputs.key == 'cas' && secrets.BUILDBUDDY_CAS_ONLY_API_KEY || secrets.BUILDBUDDY_ORG_API_KEY }}
+      BB_CONFIG: ${{ inputs.key == 'cas' && 'rbe-cas' || 'rbe' }}
     strategy:
       fail-fast: false
       matrix:
