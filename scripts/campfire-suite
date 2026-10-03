@@ -53,6 +53,8 @@
 #   --out DIR    Emit into DIR and keep it (default: a temp dir, removed).
 #   --keep       Keep the temp emit and print its path.
 #   --reuse DIR  Skip transpiling; run against an emit DIR prepared earlier.
+#   --emit-only  Transpile and prepare into --out DIR, run nothing: the DIR
+#                a later --reuse runs against.
 #   --no-stubs   Splice nothing (see scripts/campfire-walk's note).
 #   --stubs      Splice anyway — the spinel lane's default is off.
 #   --filter PAT Only run test files whose path matches PAT (grep -E).
@@ -83,6 +85,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$HOME/git/once-campfire"
 OUT=""
 KEEP=0
+EMIT_ONLY=0
 STUBS=1
 STUBS_SET=0
 TARGET=ruby
@@ -100,6 +103,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --out)       OUT="$2"; KEEP=1; shift 2 ;;
         --keep)      KEEP=1;   shift ;;
+        --emit-only) EMIT_ONLY=1; shift ;;
         --reuse)     REUSE="$2"; shift 2 ;;
         --no-stubs)  STUBS=0; STUBS_SET=1; shift ;;
         --stubs)     STUBS=1; STUBS_SET=1; shift ;;
@@ -229,6 +233,12 @@ if [[ -z "$REUSE" ]]; then
         ' "$OUT/boot.rb"
         echo "  spliced walk_stubs.rb ($(grep -c '^# GAP' "$OUT/walk_stubs.rb") ledger entries) into boot.rb"
     fi
+fi
+
+if (( EMIT_ONLY )); then
+    [[ -n "$REUSE" ]] && { echo "campfire-suite: --emit-only with --reuse prepares nothing" >&2; exit 2; }
+    (( KEEP )) || { echo "campfire-suite: --emit-only needs --out DIR" >&2; exit 2; }
+    exit 0
 fi
 
 # -------- the app's own file list --------

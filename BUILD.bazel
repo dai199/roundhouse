@@ -463,10 +463,26 @@ repo_lane(base = LANE, name = "lane_browser_smoke_ide",
     tags = ["cpu:4"],
 )
 
-repo_lane(base = LANE, name = "lane_campfire_conformance",
-    script = "campfire_conformance",
-    campfire = True,
-    env = {"FLOOR_TESTS": "392", "FLOOR_FILES": "66"},
+# Emit and run apart, as compare does: a compiler change that leaves campfire's emit byte-identical reuses the run.
+genrule(
+    name = "campfire_suite_emit",
+    srcs = [":campfire_src", "//bazel:shim"] + glob(["scripts/**"]),
+    outs = ["campfire-suite-emit.tar", "campfire-strict-errors.txt"],
+    cmd = ("$(location //bazel:campfire_suite_emit.sh) $(location :roundhouse) $(location :campfire_src) " +
+           "$(location //bazel:pack.py) $(location campfire-suite-emit.tar) $(location campfire-strict-errors.txt)"),
+    exec_properties = {"container-image": CI_IMAGE},
+    tools = [":roundhouse", "//bazel:campfire_suite_emit.sh", "//bazel:pack.py"],
+)
+
+sh_test(
+    name = "lane_campfire_conformance",
+    srcs = ["//bazel:lanes/campfire_conformance.sh"],
+    args = ["$(rootpath :campfire-suite-emit.tar)", "$(rootpath :campfire-strict-errors.txt)"],
+    data = [":campfire-suite-emit.tar", ":campfire-strict-errors.txt", "tests/campfire_suite_bcrypt.rb"] + glob(["scripts/**"]),
+    env = dict(TEST_ENV, FLOOR_TESTS = "392", FLOOR_FILES = "66"),
+    exec_properties = {"container-image": CI_IMAGE, "network": "external"},
+    tags = ["requires-network", "lane"],
+    timeout = "eternal",
 )
 
 repo_lane(base = LANE, name = "lane_campfire_db_differential", script = "campfire_db_differential", campfire = True)
