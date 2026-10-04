@@ -20,6 +20,9 @@ cargo_build_script(
     srcs = ["build.rs"],
     crate_root = "build.rs",
     data = glob(["runtime/ruby/**", "runtime/spinel/**"]),
+    # Not the commit: a local build sees .git through the execroot and a remote one does not, and a stamp
+    # that differs by machine (or by commit) would change every emit and miss every cache built on one.
+    build_script_env = {"GIT_DIR": "/nonexistent"},
     edition = "2024",
 )
 

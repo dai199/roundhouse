@@ -10,7 +10,8 @@ if [[ -d fixtures && -n "$(find fixtures -maxdepth 3 -path '*/test/*' -type l -p
     if [[ -d "$app/test" ]]; then
       mkdir -p "$tree/$app"
       for e in "$app"/* "$app"/.[!.]*; do [[ -e "$e" && "${e##*/}" != test ]] && ln -s "$PWD/$e" "$tree/$e"; done
-      cp -RL "$app/test" "$tree/$app/test"
+      # Hard links, not copies: real files to ingest, at the cost of a directory walk.
+      cp -RLl "$app/test" "$tree/$app/test" 2>/dev/null || cp -RL "$app/test" "$tree/$app/test"
     else
       ln -s "$PWD/$app" "$tree/$app"
     fi
