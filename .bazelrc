@@ -38,9 +38,6 @@ common:image-env --action_env=DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 --test_env=DOT
 common:image-env --action_env=DOTNET_NOLOGO=1 --test_env=DOTNET_NOLOGO=1
 common:image-env --action_env=DOTNET_CLI_TELEMETRY_OPTOUT=1 --test_env=DOTNET_CLI_TELEMETRY_OPTOUT=1
 
-# Same wrapper remotely and locally, so the test keys stay equal; it only acts on symlinked fixtures.
-test:image-env --run_under=//bazel:real_test_dirs
-
 # Remote execution on BuildBuddy's Linux executors (Ubuntu 22.04 image).
 build:rbe --config=bb
 build:rbe --config=image-env
