@@ -12,7 +12,8 @@ use roundhouse::ingest::ingest_app_from_tree;
 const SCHEMA: &str = "ActiveRecord::Schema.define(version: 1) do\n  \
     create_table :widgets do |t|\n    t.string :name\n    t.integer :count\n    t.boolean :live\n    t.date :due_on\n    t.timestamps\n  end\n  \
     create_table :prices do |t|\n    t.decimal :amount, precision: 8, scale: 2\n  end\n  \
-    create_table :notes do |t|\n    t.text :data\n  end\nend\n";
+    create_table :notes do |t|\n    t.text :data\n  end\n  \
+    create_table :events do |t|\n    t.datetime :starts_at\n  end\nend\n";
 
 const CONTROLLER: &str = r#"class WidgetsController < ApplicationController
   def show
@@ -30,6 +31,10 @@ const CONTROLLER: &str = r#"class WidgetsController < ApplicationController
   def note
     render json: Note.find(params[:id])
   end
+
+  def event
+    render json: Event.find(params[:id])
+  end
 end
 "#;
 
@@ -43,8 +48,12 @@ fn emitted() -> (String, String) {
         b"class Note < ApplicationRecord\n  serialize :data, coder: JSON\nend\n".to_vec(),
     );
     tree.insert(
+        PathBuf::from("app/models/event.rb"),
+        b"class Event < ApplicationRecord\n  def starts_at\n    super || Time.at(0)\n  end\nend\n".to_vec(),
+    );
+    tree.insert(
         PathBuf::from("config/routes.rb"),
-        b"Rails.application.routes.draw do\n  resources :widgets do\n    get :price, on: :member\n    get :note, on: :member\n  end\nend\n".to_vec(),
+        b"Rails.application.routes.draw do\n  resources :widgets do\n    get :price, on: :member\n    get :note, on: :member\n    get :event, on: :member\n  end\nend\n".to_vec(),
     );
     tree.insert(PathBuf::from("app/controllers/widgets_controller.rb"), CONTROLLER.as_bytes().to_vec());
     let mut app = ingest_app_from_tree(tree).expect("ingest");
@@ -95,4 +104,12 @@ fn a_decimal_column_or_a_serialized_attribute_keeps_the_runtime_encoder() {
     assert!(!class_body(&models, "Note").contains("as_json_str"));
     let price = &controller[controller.find("def price").expect("price")..];
     assert!(price.contains("JsonRender") && !price.contains("as_json_str"), "{price}");
+}
+
+#[test]
+fn an_overridden_temporal_reader_keeps_the_runtime_encoder() {
+    let (models, controller) = emitted();
+    assert!(!class_body(&models, "Event").contains("as_json_str"));
+    let event = &controller[controller.find("def event").expect("event")..];
+    assert!(event.contains("JsonRender") && !event.contains("as_json_str"), "{event}");
 }

@@ -36,7 +36,12 @@ pub(super) fn column_writer(
     for column in &table.columns {
         match &column.col_type {
             // `writer_body` routes these through the date seam and `encode_datetime`, which a later pass zones for a non-UTC app.
-            ColumnType::Date | ColumnType::DateTime => {}
+            ColumnType::Date | ColumnType::DateTime => {
+                // Not the stored value when the model overrides the reader: Rails serializes through `send(name)`.
+                if overrides_reader(model, &column.name) {
+                    return Err("a temporal column's reader is overridden");
+                }
+            }
             // Not written: Rails anchors a time to 2000-01-01, quotes a decimal, nests json, and the schema keeps a reference under its logical name.
             ColumnType::Time
             | ColumnType::Decimal { .. }
@@ -64,4 +69,20 @@ pub(super) fn column_writer(
         pairs.push(JsonPair { key: column.name.clone(), value: PairValue::Reader(column.name.clone()), cond: None });
     }
     writer_method(&model.name, &pairs, Some(table), &[])
+}
+
+fn overrides_reader(model: &Model, name: &crate::ident::Symbol) -> bool {
+    model.body.iter().any(|item| match item {
+        ModelBodyItem::Method { method, .. } => {
+            method.receiver == crate::dialect::MethodReceiver::Instance && &method.name == name
+        }
+        ModelBodyItem::Alias { new, .. } => new == name,
+        ModelBodyItem::Unknown { expr, .. } => matches!(
+            &*expr.node,
+            ExprNode::Send { recv: None, method, args, .. }
+                if method.as_str() == "alias_attribute"
+                    && args.first().is_some_and(|a| matches!(&*a.node, ExprNode::Lit { value: crate::expr::Literal::Sym { value } } if value == name))
+        ),
+        _ => false,
+    })
 }
