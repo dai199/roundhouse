@@ -321,11 +321,7 @@ module ActiveRecord
     # Not `errors`, the full messages: Rails renders a record's errors keyed by attribute, as `errors.as_json` answers.
     def errors_json
       out = {}
-      error_details.each do |error|
-        list = out.fetch(error.attribute, [])
-        list << error.message
-        out[error.attribute] = list
-      end
+      error_details.each { |error| out[error.attribute] = error_messages_for(error.attribute) }
       out
     end
 
