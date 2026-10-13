@@ -872,7 +872,8 @@ encoder, which the strict targets do not have; the suite ledger's
 **A table-backed record with no `as_json` is its columns.** Rails
 serializes one through `serializable_hash`: every attribute in
 `attribute_names` order (the primary key, then the schema's columns), each
-as `as_json` writes it. `lower::as_json_record` writes that down as the same
+as `as_json` writes it, except the inheritance column (`type`), which
+ActiveRecord's `serializable_hash` always excepts. `lower::as_json_record` writes that down as the same
 `as_json_str` writer over the columns, so `render json: @article`, an Array
 of records and a Relation (`render json: @stories`) are the writer's text
 on every tree. The writer is HTML-entity escaped and writes a datetime as
@@ -882,8 +883,10 @@ Relation as its `to_s`. A model keeps the runtime encoder when Rails would
 answer differently from the columns alone. That covers a `time`, `decimal`,
 `json`/`jsonb` or `binary` column, a `references` column the schema keeps
 under its logical name, and an `attribute`, `serialize`, `store`,
-`store_accessor`, `encrypts` or `composed_of` declaration. It also covers a
-column whose reader is not typed as a JSON scalar.
+`store_accessor`, `encrypts` or `composed_of` declaration, a renamed
+`inheritance_column` or `ignored_columns`, and an overridden reader of a date
+or datetime column (the writer reads the stored value, while Rails calls the
+reader). It also covers a column whose reader is not typed as a JSON scalar.
 
 Inline Hash/Array payloads whose inferred contents are JSON primitives use
 the target's existing `JSON.generate` encoder, including nested primitive

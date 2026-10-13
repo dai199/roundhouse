@@ -10,7 +10,7 @@ use roundhouse::emit::ruby;
 use roundhouse::ingest::ingest_app_from_tree;
 
 const SCHEMA: &str = "ActiveRecord::Schema.define(version: 1) do\n  \
-    create_table :widgets do |t|\n    t.string :name\n    t.integer :count\n    t.boolean :live\n    t.date :due_on\n    t.timestamps\n  end\n  \
+    create_table :widgets do |t|\n    t.string :type\n    t.string :name\n    t.integer :count\n    t.boolean :live\n    t.date :due_on\n    t.timestamps\n  end\n  \
     create_table :prices do |t|\n    t.decimal :amount, precision: 8, scale: 2\n  end\n  \
     create_table :notes do |t|\n    t.text :data\n  end\n  \
     create_table :events do |t|\n    t.datetime :starts_at\n  end\nend\n";
@@ -86,6 +86,8 @@ fn a_rendered_record_gets_a_writer_over_its_columns_in_schema_order() {
         .collect();
     assert!(keys.windows(2).all(|w| w[0] < w[1]), "columns out of schema order:\n{widget}");
     assert!(widget.contains("JsonBuilder.encode_datetime(self.created_at_raw)"), "{widget}");
+    let writer = &widget[widget.find("def as_json_str").expect("writer")..];
+    assert!(!writer.contains(r#"\"type\":"#), "the inheritance column is excepted, as Rails does:\n{writer}");
 }
 
 #[test]

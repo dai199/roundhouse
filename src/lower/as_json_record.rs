@@ -17,6 +17,9 @@ use super::as_json_writer::{writer_method, PairEncoding};
 const ATTRIBUTE_MACROS: &[&str] =
     &["attribute", "serialize", "store", "store_accessor", "encrypts", "composed_of"];
 
+// Not read from the declaration: an app that renames the inheritance column or ignores columns keeps the runtime encoder.
+const COLUMN_SETTERS: &[&str] = &["inheritance_column=", "ignored_columns=", "ignored_columns"];
+
 pub(super) fn column_writer(
     model: &Model,
     table: &Table,
@@ -31,9 +34,22 @@ pub(super) fn column_writer(
     }) {
         return Err("the model declares attributes beyond its columns");
     }
+    if model.body.iter().any(|item| match item {
+        ModelBodyItem::Unknown { expr, .. } => matches!(
+            &*expr.node,
+            ExprNode::Send { method, .. } if COLUMN_SETTERS.contains(&method.as_str())
+        ),
+        _ => false,
+    }) {
+        return Err("the model changes which columns serialize");
+    }
     let info = registry.get(&model.name).ok_or("the model has no analyzed class info")?;
     let mut pairs = Vec::new();
     for column in &table.columns {
+        // Not serialized: Rails' `serializable_hash` excepts the inheritance column whenever the record has one.
+        if column.name.as_str() == "type" {
+            continue;
+        }
         match &column.col_type {
             // `writer_body` routes these through the date seam and `encode_datetime`, which a later pass zones for a non-UTC app.
             ColumnType::Date | ColumnType::DateTime => {
