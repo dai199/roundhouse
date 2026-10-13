@@ -139,7 +139,7 @@ fn rewrite_to_hash(expr: &mut Expr) {
     *expr = errors_hash(expr.span, reader);
 }
 
-// Not the Array of full messages: Rails' `render json:` writes `errors.as_json`, which is `to_hash`, keyed by attribute.
+// Not the Array of full messages, nor `errors_to_hash`: Rails' `render json:` writes `errors.as_json` keyed by attribute, and `Base#errors_json` reaches every target with String keys, which JSON writes the same.
 fn rewrite_render_json(expr: &mut Expr) {
     let ExprNode::Send { recv: None, method, args, .. } = &mut *expr.node else { return };
     if method.as_str() != "render" {
@@ -157,8 +157,16 @@ fn rewrite_render_json(expr: &mut Expr) {
 
 fn json_value(value: &mut Expr) {
     if is_errors_read(value) {
-        let reader = value.clone();
-        *value = errors_hash(value.span, &reader);
+        let ExprNode::Send { recv: owner, .. } = &*value.node else { unreachable!("an errors reader") };
+        let mut json = Expr::new(
+            value.span,
+            ExprNode::Send { recv: owner.clone(), method: Symbol::from("errors_json"), args: Vec::new(), block: None, parenthesized: false },
+        );
+        json.ty = Some(Ty::Hash {
+            key: std::sync::Arc::new(Ty::Str),
+            value: std::sync::Arc::new(Ty::Array { elem: std::sync::Arc::new(Ty::Str) }),
+        });
+        *value = json;
         return;
     }
     match &mut *value.node {
