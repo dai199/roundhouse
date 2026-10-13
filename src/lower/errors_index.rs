@@ -18,6 +18,10 @@
 //! must itself be a zero-arg `errors` send, which is what makes the
 //! site our accumulator rather than some other object's `[]`.
 //!
+//! `errors.to_hash` is the same projection for every attribute at once:
+//! `ActiveSupport.errors_to_hash(<recv>.error_details)` groups the
+//! details' messages by attribute, in the order Rails does.
+//!
 //! Views take the same rewrite: the scaffold's form partial reads
 //! `<record>.errors[:field].none?` / `.any?` inside a `class:` array,
 //! which renders through `class_names` at request time.
@@ -105,7 +109,7 @@ fn rewrite_messages(expr: &mut Expr, diags: &mut Vec<Diagnostic>) {
         }
         ("key?" | "has_key?" | "include?" | "member?", [field]) => {
             let field = field.clone();
-            let mut index = send(span, accumulator, "[]", vec![field], Ty::Array { elem: Box::new(Ty::Str) });
+            let mut index = send(span, accumulator, "[]", vec![field], Ty::Array { elem: std::sync::Arc::new(Ty::Str) });
             rewrite_index(&mut index, diags);
             Some(send(span, index, "any?", vec![], Ty::Bool))
         }
@@ -122,6 +126,35 @@ fn rewrite(expr: &mut Expr, diags: &mut Vec<Diagnostic>) {
     expr.node.for_each_child_mut(&mut |c| rewrite(c, diags));
     rewrite_messages(expr, diags);
     rewrite_index(expr, diags);
+    rewrite_to_hash(expr);
+}
+
+/// `<owner>.errors.to_hash` → `ActiveSupport.errors_to_hash(<owner>.error_details)`, typed.
+fn rewrite_to_hash(expr: &mut Expr) {
+    let ExprNode::Send { recv: Some(reader), method, args, block: None, .. } = &*expr.node else { return };
+    if method.as_str() != "to_hash" || !args.is_empty() || !is_errors_read(reader) {
+        return;
+    }
+    let ExprNode::Send { recv: owner, .. } = &*reader.node else { unreachable!("an errors reader") };
+    let span = expr.span;
+    let mut details = Expr::new(
+        span,
+        ExprNode::Send { recv: owner.clone(), method: Symbol::from("error_details"), args: Vec::new(), block: None, parenthesized: false },
+    );
+    details.ty = Some(super::errors_add::error_details_ty());
+    let mut support = Expr::new(span, ExprNode::Const { path: vec![Symbol::from("ActiveSupport")] });
+    support.ty = Some(Ty::Class { id: crate::ident::ClassId(Symbol::from("ActiveSupport")), args: vec![].into() });
+    let mut call = Expr::new(
+        span,
+        ExprNode::Send { recv: Some(support), method: Symbol::from("errors_to_hash"), args: vec![details], block: None, parenthesized: true },
+    );
+    call.ty = Some(Ty::Hash {
+        key: std::sync::Arc::new(Ty::Sym),
+        value: std::sync::Arc::new(Ty::Array {
+            elem: std::sync::Arc::new(Ty::Str),
+        }),
+    });
+    *expr = call;
 }
 
 fn ledger_messages(expr: &mut Expr, diags: &mut Vec<Diagnostic>) {
@@ -176,7 +209,7 @@ pub(crate) fn messages_on(owner: Option<Expr>, field: &str, span: crate::span::S
     );
     // Stamp the result: callers run *after* analyze, and the post-lowering
     // `diagnose` walk reads stamped types without re-dispatching.
-    e.ty = Some(Ty::Array { elem: Box::new(Ty::Str) });
+    e.ty = Some(Ty::Array { elem: std::sync::Arc::new(Ty::Str) });
     e
 }
 

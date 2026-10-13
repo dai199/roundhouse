@@ -56,6 +56,10 @@ mod cable_actions;
 mod cable_broadcast_json_contract;
 #[path = "spinel_toolchain/cable_broadcast_json.rs"]
 mod cable_broadcast_json;
+#[path = "support/index_with.rs"]
+mod index_with_contract;
+#[path = "spinel_toolchain/index_with.rs"]
+mod index_with;
 #[path = "support/anonymous_keywords.rs"]
 mod anonymous_keywords;
 #[path = "support/lambda_signatures.rs"]
@@ -90,6 +94,8 @@ mod ordinalize;
 mod params_helper_no_permit;
 #[path = "spinel_toolchain/rails_parity.rs"]
 mod rails_parity;
+#[path = "spinel_toolchain/server_binding.rs"]
+mod server_binding;
 
 /// Compile and execute the shared custom Data factory contract with Spinel;
 /// successful Ruby emission alone does not establish native target support.

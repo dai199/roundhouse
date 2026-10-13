@@ -1472,6 +1472,40 @@ broadcast had already gone out. `scripts/campfire-cable-walk` splices
 header. What this runtime does not have is the third option Rails
 actually uses: enqueue now, run elsewhere, later.
 
+### Queued jobs are serialized payloads, but nothing is durable
+
+On the ruby, jruby and spinel lanes, a served app's `perform_later`
+queues an ActiveJob-format JSON payload: the `job.serialize` hash of
+activejob 8.1.3, with records as GlobalIDs (`lower::job_payload`,
+`runtime/spinel/active_job_serialization.rb`). The drain looks the
+records up again when it runs the job, so the job sees committed state,
+and a record deleted in between raises
+`ActiveJob::DeserializationError`, which `discard_on` drops. The codecs
+come from the job's `perform_later` call sites, and
+`tests/active_job_payload.rs` holds the format to Rails' own output.
+
+**What is still missing.**
+
+- **Durability.** The payloads sit in a process-local Array. Nothing is
+  retried (`retry_on` is inert), nothing is scheduled (`set(wait:)` is
+  dropped), and nothing survives a restart. A payload is what an
+  external adapter such as Sidekiq would store; no such adapter exists
+  yet.
+- **Some argument types.** A job whose call sites pass a Hash, a Date,
+  an untyped value, or nothing typed at all keeps its closure, with a
+  `job-closure-fallback` warning naming the parameter. Lobsters'
+  `ResticJob`, `WalCheckpointJob` and `MastodonSyncListJob` are the
+  corpus cases.
+- **One queue.** `queue_name` is recorded, but every entry drains in
+  arrival order.
+- **The test adapter keeps closures.** `assert_enqueued_with` still
+  checks the job and not its arguments (above).
+- **`enqueue_after_transaction_commit`** is honored for payload jobs
+  inside `Model.transaction`, held until the outermost COMMIT. A nested
+  `requires_new:` block runs in a SAVEPOINT, and a job held inside one
+  that rolls back is still queued when the outer transaction commits
+  (Rails drops it). A closure job that sets it is still queued at once.
+
 ### ActiveJob's test helpers count NAMES, and `perform_enqueued_jobs` re-enters inline
 
 `ActiveJob::PERFORMED` is the queue-inspection seam, appended by the
@@ -1845,6 +1879,13 @@ picks the details on that attribute and answers their messages, so the
 read is exact under any `errors.format`, and `:base` is an attribute
 like any other. The form builder's `field_with_errors` wrapper asks the
 same question with `any?`.
+
+`errors.to_hash` groups the same details by attribute:
+`ActiveSupport.errors_to_hash(error_details)`, in the order of each
+attribute's first error, as Rails orders it. The helper lives in
+`runtime/ruby/active_support_ext.rb`, so a strict target ledgers the
+call as a `bundled_method` gap. A message pushed with `errors <<` has
+no detail, so `to_hash` leaves it out; Rails' Errors has no `<<`.
 
 **Why full messages stay in `errors`.** The runtime has no i18n to
 humanize an attribute with, and the lowering already bakes the full
