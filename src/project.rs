@@ -5293,6 +5293,28 @@ fn is_unported_model_instance_method(
         })
 }
 
+/// Whether `recv`'s class carries a `method` the compiler wrote (its name span synthetic), as opposed to one the app declares.
+fn calls_synthesized_method(recv: &crate::expr::Expr, method: &str, app: &App) -> bool {
+    fn class_ids(ty: &crate::ty::Ty, out: &mut Vec<crate::ident::ClassId>) {
+        match ty {
+            crate::ty::Ty::Class { id, .. } => out.push(id.clone()),
+            crate::ty::Ty::Union { variants } => variants.iter().for_each(|v| class_ids(v, out)),
+            _ => {}
+        }
+    }
+    let Some(ty) = &recv.ty else { return false };
+    let mut ids = Vec::new();
+    class_ids(ty, &mut ids);
+    ids.iter().any(|id| {
+        app.models.iter().filter(|m| m.name == *id).any(|m| {
+            m.body.iter().any(|item| matches!(item, crate::dialect::ModelBodyItem::Method { method: def, .. }
+                if def.name.as_str() == method && def.name_span.is_synthetic()))
+        }) || app.library_classes.iter().filter(|c| c.name == *id).any(|c| {
+            c.methods.iter().any(|def| def.name.as_str() == method && def.name_span.is_synthetic())
+        })
+    })
+}
+
 /// True when the app already defines `id` as a class/module value, so
 /// the availability gate must not ledger it as a missing runtime stub.
 fn app_defines_class(app: &App, id: &crate::ident::ClassId) -> bool {
@@ -5401,6 +5423,8 @@ fn report_unsupported_bundled_constants(app: &App, target: BuildTarget) {
             && !expr.span.is_synthetic()
             && (method.as_str() == crate::lower::JSON_WRITER_METHOD
                 || method.as_str().starts_with(&format!("{}__", crate::lower::JSON_WRITER_METHOD)))
+            && let crate::expr::ExprNode::Send { recv: Some(recv), .. } = &*expr.node
+            && calls_synthesized_method(recv, method.as_str(), app)
         {
             emit::diagnostics::report_unsupported(
                 expr.span,
