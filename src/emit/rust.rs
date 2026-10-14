@@ -954,9 +954,10 @@ pub fn emit(app: &App) -> Vec<EmittedFile> {
         // RouteHelpers`). Append per-method delegating wrappers so
         // both call shapes resolve.
         let bare_wrappers = render_route_helpers_bare_wrappers(lc);
+        let import = if body.contains("ViewHelpers::") { "use crate::view_helpers::ViewHelpers;\n\n" } else { "" };
         files.push(EmittedFile {
             path: PathBuf::from("src/route_helpers.rs"),
-            content: format!("{body}{bare_wrappers}"),
+            content: format!("{import}{body}{bare_wrappers}"),
         });
     }
 
