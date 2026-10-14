@@ -211,23 +211,25 @@ module ActionView
 
     URL_ESCAPE_PATTERN = /[\x00\r\n !"\#$%&'()*+,\/:;<=>?@\[\\\]^`{|}]/.freeze
 
+    URL_UNRESERVED = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+    URL_HEX_DIGITS = "0123456789ABCDEF"
+
     # ERB::Util.url_encode, a view's `u(x)`: every byte but the unreserved
     # ones (A-Z a-z 0-9 _ . ~ -) as `%XX`, uppercase, so a space is `%20`
     # and a multibyte character is its UTF-8 bytes. Not `url_encode`
     # below, which is CGI.escape (`+` for a space) for query strings.
     # Concat, not `<<`, as in render_attrs: `out << s` lowers as `.add` /
     # write-into-`&str` on Kotlin/C#/Rust/Python/Elixir.
+    # Not `b.chr` / `format("%02X")` over `bytes`: neither lowers on Go, Rust, C#, Kotlin, Swift or Elixir.
     def self.erb_url_encode(s)
-      out = ""
-      s.bytes.each do |b|
-        if (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) ||
-           b == 45 || b == 46 || b == 95 || b == 126
-          out = out + b.chr
-        else
-          out = out + format("%%%02X", b)
-        end
-      end
-      out
+      erb_url_encode_from(s, 0, s.length, "")
+    end
+
+    def self.erb_url_encode_from(s, i, n, out)
+      return out if i >= n
+      c = s[i, 1]
+      piece = URL_UNRESERVED.include?(c) ? c : c.bytes.map { |b| "%" + URL_HEX_DIGITS[b / 16, 1] + URL_HEX_DIGITS[b % 16, 1] }.join
+      erb_url_encode_from(s, i + 1, n, out + piece)
     end
 
     # Same include? probe as html_escape (no portable match? emit).
