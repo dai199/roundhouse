@@ -4092,7 +4092,7 @@ end
 #[test]
 fn render_json_record_writer_is_unsupported_on_strict_targets() {
     use roundhouse::project::BuildTarget;
-    for target in [BuildTarget::Go, BuildTarget::Typescript] {
+    for target in [BuildTarget::Go, BuildTarget::Python] {
         let (_emitted, errors) = records_json_app().emit(target);
         assert!(errors.iter().any(|e| e.contains("json_writer")), "{target:?}: {errors:?}");
     }
@@ -4245,6 +4245,19 @@ fn json_writer_rust_app() -> emit_and_run::Overlay {
 #[test]
 fn render_json_record_writer_test_passes() {
     json_writer_app().run_test("test/controllers/articles_controller_test.rb").assert_passes();
+}
+
+/// The same test, translated to TypeScript, against the writer the TypeScript project builds.
+#[test]
+#[ignore = "requires Node; installs and runs an emitted app"]
+fn render_json_record_writer_runs_on_typescript() {
+    let (emitted, errors) = json_writer_app().emit(roundhouse::project::BuildTarget::Typescript);
+    assert!(errors.is_empty(), "{errors:?}");
+    for args in [&["install", "--silent", "--no-audit", "--no-fund"][..], &["test"][..]] {
+        let output = std::process::Command::new("npm").args(args).current_dir(&*emitted).output().expect("run npm");
+        assert!(output.status.success(), "npm {args:?} in {}\n{}\n{}", emitted.display(),
+            String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    }
 }
 
 /// The same writer compiled by Spinel, where the runtime encoder does not exist.
@@ -14954,6 +14967,7 @@ puts "PASS friendly oracle"
 }
 #[path = "emit_and_run/acts_as_votable.rs"]
 mod acts_as_votable;
+
 
 
 
