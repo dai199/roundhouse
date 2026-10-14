@@ -79,6 +79,10 @@ pub(super) fn json_text(value: &Expr, written: &HashSet<ClassId>) -> Option<Expr
         ExprNode::Array { elements, .. } => {
             let mut parts = vec![lit(value, "[")];
             for (i, e) in elements.iter().enumerate() {
+                // Not written down: a splat's elements are only known at run time.
+                if matches!(&*e.node, ExprNode::Splat { .. }) {
+                    return None;
+                }
                 if i > 0 {
                     parts.push(lit(value, ","));
                 }

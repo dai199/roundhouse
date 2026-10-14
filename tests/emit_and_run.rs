@@ -3607,6 +3607,8 @@ fn json_values_app() -> emit_and_run::Overlay {
       render json: { articles: Article.where(id: article.id), total: 1 }
     when "array"
       render json: [article, nil, "x"]
+    when "splat"
+      render json: [*Article.where(id: article.id).to_a, "x"]
     else
       stamps = { "at" => at }
       render json: { stamps: stamps, times: [at] }
@@ -3646,6 +3648,11 @@ class ValuesControllerTest < ActionDispatch::IntegrationTest
   test "an array literal" do
     get "/values/#{@article.id}", params: { shape: "array" }
     assert_equal %([#{@record},null,"x"]), response.body
+  end
+
+  test "a splat keeps the runtime encoder and its elements" do
+    get "/values/#{@article.id}", params: { shape: "splat" }
+    assert_match(/\A\[\{"id":#{@article.id},.*\},"x"\]\z/, response.body)
   end
 
   test "a typed hash and array of times" do
