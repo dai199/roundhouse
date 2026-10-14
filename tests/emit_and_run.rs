@@ -3586,6 +3586,152 @@ fn render_json_errors_messages_reaches_strict_targets() {
     assert!(errors.is_empty(), "{errors:#?}");
 }
 
+/// `render json:` of values holding records and Times: Hash and Array literals, a typed Hash.
+fn json_values_app() -> emit_and_run::Overlay {
+    emit_and_run::real_blog()
+        .edit(
+            "config/routes.rb",
+            "  root \"articles#index\"\n",
+            "  root \"articles#index\"\n  get \"/values/:id\", to: \"values#show\"\n",
+        )
+        .write(
+            "app/controllers/values_controller.rb",
+            r#"class ValuesController < ApplicationController
+  def show
+    article = Article.find(params[:id])
+    at = Time.utc(2026, 1, 2, 3, 4, 5, 678901)
+    case params[:shape]
+    when "hash"
+      render json: { article: article, ok: true, count: 2, note: nil, at: at }
+    when "list"
+      render json: { articles: Article.where(id: article.id), total: 1 }
+    when "array"
+      render json: [article, nil, "x"]
+    else
+      stamps = { "at" => at }
+      render json: { stamps: stamps, times: [at] }
+    end
+  end
+end
+"#,
+        )
+}
+
+/// Each value as Rails' `to_json` writes it: a record as its columns, a
+/// Time as `xmlschema(3)` with `Z` for UTC, nil as `null`.
+#[test]
+fn render_json_values_hold_records_and_times() {
+    json_values_app()
+        .write(
+            "test/controllers/values_controller_test.rb",
+            r##"require "test_helper"
+
+class ValuesControllerTest < ActionDispatch::IntegrationTest
+  setup do
+    @article = Article.create!(title: "A <b>", body: "Long enough body text")
+    @record = %({"id":#{@article.id},"title":"A \\u003cb\\u003e","body":"Long enough body text","created_at":"#{@article.created_at.utc.strftime("%Y-%m-%dT%H:%M:%S.%LZ")}","updated_at":"#{@article.updated_at.utc.strftime("%Y-%m-%dT%H:%M:%S.%LZ")}"})
+  end
+
+  test "a hash literal" do
+    get "/values/#{@article.id}", params: { shape: "hash" }
+    assert_equal "application/json", response.media_type
+    assert_equal %({"article":#{@record},"ok":true,"count":2,"note":null,"at":"2026-01-02T03:04:05.678Z"}), response.body
+  end
+
+  test "a relation inside a hash" do
+    get "/values/#{@article.id}", params: { shape: "list" }
+    assert_equal %({"articles":[#{@record}],"total":1}), response.body
+  end
+
+  test "an array literal" do
+    get "/values/#{@article.id}", params: { shape: "array" }
+    assert_equal %([#{@record},null,"x"]), response.body
+  end
+
+  test "a typed hash and array of times" do
+    get "/values/#{@article.id}"
+    assert_equal %({"stamps":{"at":"2026-01-02T03:04:05.678Z"},"times":["2026-01-02T03:04:05.678Z"]}), response.body
+  end
+end
+"##,
+        )
+        .run_test("test/controllers/values_controller_test.rb")
+        .assert_passes();
+}
+
+/// The same values compiled by Spinel, where the runtime encoder cannot type them.
+#[test]
+#[ignore = "requires the Spinel toolchain"]
+fn render_json_values_run_on_spinel() {
+    let script = r##"Db.configure(":memory:")
+Schema.statements.each { |sql| Db.exec(sql) }
+ActiveRecord.adapter = SqliteAdapter
+a = Article.create!(title: "A <b>", body: "Long enough body text")
+["hash", "list", "array", "times"].each do |shape|
+  c = ValuesController.new
+  c.params = { "id" => a.id.to_s, "shape" => shape }
+  c.process_action(:show)
+  puts c.body
+end
+"##;
+    let run = json_values_app().run_spinel(script);
+    run.assert_passes();
+    let lines: Vec<&str> = run.stdout.lines().collect();
+    assert_eq!(lines.len(), 4, "{}", run.stdout);
+    assert!(lines[0].starts_with(r#"{"article":{"id":1,"title":"A \u003cb\u003e","body":"Long enough body text","created_at":""#), "{}", lines[0]);
+    assert!(lines[0].ends_with(r#"Z"},"ok":true,"count":2,"note":null,"at":"2026-01-02T03:04:05.678Z"}"#), "{}", lines[0]);
+    assert!(lines[1].starts_with(r#"{"articles":[{"id":1,"#) && lines[1].ends_with(r#"Z"}],"total":1}"#), "{}", lines[1]);
+    assert!(lines[2].starts_with(r#"[{"id":1,"#) && lines[2].ends_with(r#"Z"},null,"x"]"#), "{}", lines[2]);
+    assert_eq!(lines[3], r#"{"stamps":{"at":"2026-01-02T03:04:05.678Z"},"times":["2026-01-02T03:04:05.678Z"]}"#);
+}
+
+/// A Date value as Rails writes it: the ISO date, and `null` for nil.
+fn json_dates_app() -> emit_and_run::Overlay {
+    emit_and_run::real_blog()
+        .edit("db/schema.rb", "t.string \"commenter\"", "t.string \"commenter\"\n    t.date \"archived_on\"")
+        .edit(
+            "config/routes.rb",
+            "  root \"articles#index\"\n",
+            "  root \"articles#index\"\n  get \"/days\", to: \"days#show\"\n",
+        )
+        .write(
+            "app/controllers/days_controller.rb",
+            "class DaysController < ApplicationController\n  def show\n    day = params[:none] ? nil : Date.new(2026, 1, 2)\n    render json: { day: day, days: [Date.new(2026, 3, 4)] }\n  end\nend\n",
+        )
+}
+
+#[test]
+fn render_json_date_values() {
+    json_dates_app()
+        .write(
+            "test/controllers/days_controller_test.rb",
+            "require \"test_helper\"\n\nclass DaysControllerTest < ActionDispatch::IntegrationTest\n  test \"dates\" do\n    get \"/days\"\n    assert_equal %({\"day\":\"2026-01-02\",\"days\":[\"2026-03-04\"]}), response.body\n    get \"/days\", params: { none: \"1\" }\n    assert_equal %({\"day\":null,\"days\":[\"2026-03-04\"]}), response.body\n  end\nend\n",
+        )
+        .run_test("test/controllers/days_controller_test.rb")
+        .assert_passes();
+}
+
+#[test]
+#[ignore = "requires the Spinel toolchain"]
+fn render_json_date_values_run_on_spinel() {
+    let script = r#"Db.configure(":memory:")
+Schema.statements.each { |sql| Db.exec(sql) }
+ActiveRecord.adapter = SqliteAdapter
+[{ "x" => "1" }, { "none" => "1" }].each do |params|
+  c = DaysController.new
+  c.params = params
+  c.process_action(:show)
+  puts c.body
+end
+"#;
+    let run = json_dates_app().run_spinel(script);
+    run.assert_passes();
+    assert_eq!(
+        run.stdout,
+        "{\"day\":\"2026-01-02\",\"days\":[\"2026-03-04\"]}\n{\"day\":null,\"days\":[\"2026-03-04\"]}\n"
+    );
+}
+
 /// offset. Expected values are ActiveSupport 8.1's.
 #[test]
 fn time_zone_lookups_run() {
