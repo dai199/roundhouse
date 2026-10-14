@@ -54,8 +54,13 @@ fn ty_classes(ty: &Ty, out: &mut Vec<ClassId>) {
     }
 }
 
-/// The JSON text of `value`, or `None` when some part has no encoding here (the site then keeps the runtime encoder).
+/// The JSON text of `value` for a site, or `None` when some part has no encoding here (the site then keeps the runtime encoder).
 pub(super) fn json_text(value: &Expr, written: &HashSet<ClassId>) -> Option<Expr> {
+    let text = part_text(value, written)?;
+    Some(call(value, &["ActiveSupport", "JSON"], "written", text))
+}
+
+fn part_text(value: &Expr, written: &HashSet<ClassId>) -> Option<Expr> {
     match &*value.node {
         ExprNode::Lit { value: Literal::Nil } => Some(lit(value, "null")),
         ExprNode::Hash { entries, .. } => {
@@ -71,7 +76,7 @@ pub(super) fn json_text(value: &Expr, written: &HashSet<ClassId>) -> Option<Expr
                     return None;
                 }
                 parts.push(lit(value, &format!("{}\"{}\":", if i == 0 { "" } else { "," }, key)));
-                parts.push(json_text(v, written)?);
+                parts.push(part_text(v, written)?);
             }
             parts.push(lit(value, "}"));
             Some(concat(parts))
@@ -86,7 +91,7 @@ pub(super) fn json_text(value: &Expr, written: &HashSet<ClassId>) -> Option<Expr
                 if i > 0 {
                     parts.push(lit(value, ","));
                 }
-                parts.push(json_text(e, written)?);
+                parts.push(part_text(e, written)?);
             }
             parts.push(lit(value, "]"));
             Some(concat(parts))

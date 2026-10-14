@@ -3718,6 +3718,25 @@ fn render_json_date_values() {
         .assert_passes();
 }
 
+/// A strict target reports a written-down value as unsupported rather than emitting code no toolchain has built.
+#[test]
+fn render_json_values_are_unsupported_on_strict_targets() {
+    let app = || {
+        emit_and_run::real_blog()
+            .edit("config/routes.rb", "  root \"articles#index\"\n", "  root \"articles#index\"\n  get \"/pair/:id\", to: \"pair#show\"\n")
+            .write(
+                "app/controllers/pair_controller.rb",
+                "class PairController < ApplicationController\n  def show\n    render json: { article: Article.find(params[:id]), ok: true }\n  end\nend\n",
+            )
+    };
+    for target in [roundhouse::project::BuildTarget::Rust, roundhouse::project::BuildTarget::Go] {
+        let (_emitted, errors) = app().emit(target);
+        assert!(errors.iter().any(|e| e.contains("ActiveSupport::JSON")), "{target:?}: {errors:?}");
+    }
+    let (_emitted, errors) = app().emit(roundhouse::project::BuildTarget::Ruby);
+    assert!(!errors.iter().any(|e| e.contains("ActiveSupport::JSON")), "{errors:?}");
+}
+
 #[test]
 #[ignore = "requires the Spinel toolchain"]
 fn render_json_date_values_run_on_spinel() {
