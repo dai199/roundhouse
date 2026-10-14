@@ -203,6 +203,9 @@ use crate::errors_ext::{raise, ArgumentError, NotImplementedError, RecordNotFoun
 const MODEL_IMPORTS: &str = "\
 #[allow(unused_imports)]
 use crate::active_record_base::ErrorDetail;
+// The written-down `render json:` encoder (`lower::as_json_writer`) in a model's `as_json_str`.
+#[allow(unused_imports)]
+use crate::json_builder::JsonBuilder;
 #[allow(unused_imports)]
 use crate::param_value::ParamValue;
 #[allow(unused_imports)]
