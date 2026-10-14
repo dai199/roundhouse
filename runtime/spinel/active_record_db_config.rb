@@ -14,6 +14,8 @@
 #   open around a GET does not count, as Rails has no such thing.
 # - `ActiveRecord::Base.instantiate_named(name, attributes)` — what
 #   `lower::record_snapshot` makes of `name.constantize.instantiate(...)`.
+# - `ActiveRecord::Base.preload_records(records, specs)` — what
+#   `lower::preloader` makes of a `Preloader` over several models' records.
 # - `ActiveRecord::ConnectionAdapters::SQLite3Adapter.resolve_path` —
 #   Rails main's (activerecord/lib/active_record/connection_adapters/
 #   sqlite3_adapter.rb): a `file:` URI's path, expanded against the app
@@ -119,6 +121,23 @@ module ActiveRecord
       # >>> generated: instantiate-named
       raise NameError, "uninitialized constant #{name}"
       # <<< generated: instantiate-named
+    end
+
+    # `Associations::Preloader.new(records:, associations:).call` over
+    # records of several models or of a type analysis does not know:
+    # each class's own `preload_associations` over its records, the
+    # grouping Rails' preloader does by reflection.
+    def self.preload_records(records, specs)
+      records.each_with_index do |record, i|
+        # Not a Hash keyed by class: analysis types `record.class` as a bare Class, which answers no class method.
+        next if records.take(i).any? { |earlier| earlier.class == record.class }
+        record._preload_as_group(records.select { |other| other.class == record.class }, specs)
+      end
+      nil
+    end
+
+    def _preload_as_group(group, specs)
+      self.class.preload_associations(group, specs)
     end
   end
 end

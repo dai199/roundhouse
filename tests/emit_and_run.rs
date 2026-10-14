@@ -4034,6 +4034,16 @@ puts queries.length
     assert_eq!(run.stdout, "First,Second,Second\n0\n");
 }
 
+/// The grouping lives in the ruby-family/spinel runtime file, so a strict target refuses the call.
+#[test]
+fn associations_preloader_groups_mixed_records_is_a_gap_on_strict_targets() {
+    let (_emitted, errors) = mixed_preload_app().emit(roundhouse::project::BuildTarget::Go);
+    assert!(
+        errors.iter().any(|e| e.contains("ActiveRecord::Base.preload_records is only available on the ruby family and spinel")),
+        "{errors:#?}"
+    );
+}
+
 /// `render … and return`, `redirect_to … and return` and `head … and return` return, as Rails' truthy answers make them.
 #[test]
 fn a_response_call_and_return_returns() {
