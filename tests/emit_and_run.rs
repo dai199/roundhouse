@@ -3685,10 +3685,19 @@ end
     run.assert_passes();
     let lines: Vec<&str> = run.stdout.lines().collect();
     assert_eq!(lines.len(), 4, "{}", run.stdout);
-    assert!(lines[0].starts_with(r#"{"article":{"id":1,"title":"A \u003cb\u003e","body":"Long enough body text","created_at":""#), "{}", lines[0]);
-    assert!(lines[0].ends_with(r#"Z"},"ok":true,"count":2,"note":null,"at":"2026-01-02T03:04:05.678Z"}"#), "{}", lines[0]);
-    assert!(lines[1].starts_with(r#"{"articles":[{"id":1,"#) && lines[1].ends_with(r#"Z"}],"total":1}"#), "{}", lines[1]);
-    assert!(lines[2].starts_with(r#"[{"id":1,"#) && lines[2].ends_with(r#"Z"},null,"x"]"#), "{}", lines[2]);
+    // The record's timestamps are the run's own; read them back and build the exact text around them.
+    let stamp = |key: &str| {
+        let at = lines[0].find(&format!("\"{key}\":\"")).expect(key) + key.len() + 4;
+        lines[0][at..at + 24].to_string()
+    };
+    let record = format!(
+        r#"{{"id":1,"title":"A \u003cb\u003e","body":"Long enough body text","created_at":"{}","updated_at":"{}"}}"#,
+        stamp("created_at"),
+        stamp("updated_at")
+    );
+    assert_eq!(lines[0], format!(r#"{{"article":{record},"ok":true,"count":2,"note":null,"at":"2026-01-02T03:04:05.678Z"}}"#));
+    assert_eq!(lines[1], format!(r#"{{"articles":[{record}],"total":1}}"#));
+    assert_eq!(lines[2], format!(r#"[{record},null,"x"]"#));
     assert_eq!(lines[3], r#"{"stamps":{"at":"2026-01-02T03:04:05.678Z"},"times":["2026-01-02T03:04:05.678Z"]}"#);
 }
 
@@ -3729,12 +3738,13 @@ fn render_json_values_are_unsupported_on_strict_targets() {
                 "class PairController < ApplicationController\n  def show\n    render json: { article: Article.find(params[:id]), ok: true }\n  end\nend\n",
             )
     };
-    for target in [roundhouse::project::BuildTarget::Rust, roundhouse::project::BuildTarget::Go] {
+    for (target, name) in [(roundhouse::project::BuildTarget::Rust, "rust"), (roundhouse::project::BuildTarget::Go, "go")] {
         let (_emitted, errors) = app().emit(target);
-        assert!(errors.iter().any(|e| e.contains("ActiveSupport::JSON")), "{target:?}: {errors:?}");
+        let want = format!("bundled_constant not supported ({name}): ActiveSupport::JSON is not available as a class/module value on {name}");
+        assert!(errors.iter().any(|e| e.contains(&want)), "{target:?}: {errors:?}");
     }
     let (_emitted, errors) = app().emit(roundhouse::project::BuildTarget::Ruby);
-    assert!(!errors.iter().any(|e| e.contains("ActiveSupport::JSON")), "{errors:?}");
+    assert!(errors.is_empty(), "{errors:?}");
 }
 
 #[test]
