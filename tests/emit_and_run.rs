@@ -3496,6 +3496,20 @@ end
         .assert_passes();
 }
 
+/// A strict target reports the written-down encoder as unsupported rather than emitting code no toolchain has built.
+#[test]
+fn render_json_record_writer_is_unsupported_on_strict_targets() {
+    use roundhouse::project::BuildTarget;
+    for target in [BuildTarget::Rust, BuildTarget::Go, BuildTarget::Typescript] {
+        let (_emitted, errors) = records_json_app().emit(target);
+        assert!(errors.iter().any(|e| e.contains("json_writer")), "{target:?}: {errors:?}");
+    }
+    for target in [BuildTarget::Ruby, BuildTarget::Spinel] {
+        let (_emitted, errors) = records_json_app().emit(target);
+        assert!(!errors.iter().any(|e| e.contains("json_writer")), "{target:?}: {errors:?}");
+    }
+}
+
 /// The same writer compiled by Spinel, where the runtime encoder does not exist.
 #[test]
 #[ignore = "requires the Spinel toolchain"]

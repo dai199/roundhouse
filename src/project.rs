@@ -5394,6 +5394,21 @@ fn report_unsupported_bundled_constants(app: &App, target: BuildTarget) {
                 report_unavailable_class_value(app, target, id.0.as_str(), expr.span);
             }
         }
+        // Not emitted on a strict target: the written-down JSON encoder (`lower::as_json_poro`) has been built and run only on the ruby family and spinel.
+        if let crate::expr::ExprNode::Send { recv: Some(_), method, .. } = &*expr.node
+            && target != "spinel"
+            && target != "jruby"
+            && !expr.span.is_synthetic()
+            && (method.as_str() == crate::lower::JSON_WRITER_METHOD
+                || method.as_str().starts_with(&format!("{}__", crate::lower::JSON_WRITER_METHOD)))
+        {
+            emit::diagnostics::report_unsupported(
+                expr.span,
+                target,
+                "json_writer",
+                format!("the compiled `render json:` encoder (`#{method}`) is verified on the ruby family and spinel only"),
+            );
+        }
         if let crate::expr::ExprNode::Send { recv: Some(recv), method, .. } = &*expr.node
             && target != "spinel"
             && target != "jruby"
