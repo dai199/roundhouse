@@ -3590,6 +3590,11 @@ fn render_json_errors_messages_reaches_strict_targets() {
 fn json_values_app() -> emit_and_run::Overlay {
     emit_and_run::real_blog()
         .edit(
+            "app/models/article.rb",
+            "  validates :title, presence: true\n",
+            "  validates :title, presence: true\n\n  def headline\n    title.to_s.upcase\n  end\n",
+        )
+        .edit(
             "config/routes.rb",
             "  root \"articles#index\"\n",
             "  root \"articles#index\"\n  get \"/values/:id\", to: \"values#show\"\n",
@@ -3620,6 +3625,14 @@ fn json_values_app() -> emit_and_run::Overlay {
       render json: { article: found }
     when "float"
       render json: { at: at, x: Float::INFINITY, y: 1.5 }
+    when "only"
+      render json: article, only: [:title, :id]
+    when "except"
+      render json: article, except: [:body, :updated_at], status: :ok
+    when "methods"
+      render plain: article.to_json(only: [:id], methods: [:headline])
+    when "relation_only"
+      render json: Article.where(id: article.id), only: :id
     else
       stamps = { "at" => at }
       render json: { stamps: stamps, times: [at] }
@@ -3685,6 +3698,17 @@ class ValuesControllerTest < ActionDispatch::IntegrationTest
     assert_equal %({"article":null}), response.body
   end
 
+  test "only:, except: and methods: as Rails' serializable_hash reads them" do
+    get "/values/#{@article.id}", params: { shape: "only" }
+    assert_equal %({"id":#{@article.id},"title":"A \\u003cb\\u003e"}), response.body
+    get "/values/#{@article.id}", params: { shape: "except" }
+    assert_match(/\A\{"id":#{@article.id},"title":"A \\u003cb\\u003e","created_at":"[^"]+"\}\z/, response.body)
+    get "/values/#{@article.id}", params: { shape: "methods" }
+    assert_equal %({"id":#{@article.id},"headline":"A \\u003cB\\u003e"}), response.body
+    get "/values/#{@article.id}", params: { shape: "relation_only" }
+    assert_equal %([{"id":#{@article.id}}]), response.body
+  end
+
   test "a non-finite Float is null" do
     get "/values/#{@article.id}", params: { shape: "float" }
     assert_equal %({"at":"2026-01-02T03:04:05.678Z","x":null,"y":1.5}), response.body
@@ -3709,7 +3733,7 @@ fn render_json_values_run_on_spinel() {
 Schema.statements.each { |sql| Db.exec(sql) }
 ActiveRecord.adapter = SqliteAdapter
 a = Article.create!(title: "A <b>", body: "Long enough body text")
-["hash", "list", "array", "times", "string", "raw", "to_json", "maybe", "float"].each do |shape|
+["hash", "list", "array", "times", "string", "raw", "to_json", "maybe", "float", "only", "methods", "relation_only"].each do |shape|
   c = ValuesController.new
   c.params = { "id" => a.id.to_s, "shape" => shape }
   c.process_action(:show)
@@ -3719,7 +3743,7 @@ end
     let run = json_values_app().run_spinel(script);
     run.assert_passes();
     let lines: Vec<&str> = run.stdout.lines().collect();
-    assert_eq!(lines.len(), 9, "{}", run.stdout);
+    assert_eq!(lines.len(), 12, "{}", run.stdout);
     assert!(lines[0].starts_with(r#"{"article":{"id":1,"title":"A \u003cb\u003e","body":"Long enough body text","created_at":""#), "{}", lines[0]);
     assert!(lines[0].ends_with(r#"Z"},"ok":true,"count":2,"note":null,"at":"2026-01-02T03:04:05.678Z"}"#), "{}", lines[0]);
     assert!(lines[1].starts_with(r#"{"articles":[{"id":1,"#) && lines[1].ends_with(r#"Z"}],"total":1}"#), "{}", lines[1]);
@@ -3730,6 +3754,9 @@ end
     assert!(lines[6].starts_with(r#"{"id":1,"#) && lines[6].contains(r#"Z"}|{"a":{"id":1,"#), "{}", lines[6]);
     assert_eq!(lines[7], r#"{"article":null}"#);
     assert_eq!(lines[8], r#"{"at":"2026-01-02T03:04:05.678Z","x":null,"y":1.5}"#);
+    assert_eq!(lines[9], r#"{"id":1,"title":"A \u003cb\u003e"}"#);
+    assert_eq!(lines[10], r#"{"id":1,"headline":"A \u003cB\u003e"}"#);
+    assert_eq!(lines[11], r#"[{"id":1}]"#);
 }
 
 /// A Date value as Rails writes it: the ISO date, and `null` for nil.
