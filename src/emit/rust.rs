@@ -1618,10 +1618,12 @@ fn render_axum_handler_wrappers(
         let action = r.action.as_str();
         let method_name = if action == "new" { "new_action" } else { action };
         let path_params = &r.path_params;
-        let has_body = matches!(
-            r.method,
-            HttpMethod::Post | HttpMethod::Patch | HttpMethod::Put,
-        );
+        // Over every route to the action, not the one the dedup kept: `get` and `post` to one action share this wrapper, and axum's `Form` reads a GET's query string.
+        let has_body = flat_routes.iter().any(|other| {
+            other.controller.0.as_str() == controller_name
+                && other.action == r.action
+                && matches!(other.method, HttpMethod::Post | HttpMethod::Patch | HttpMethod::Put)
+        });
         // Path params come in as String. The handler body strips an
         // optional `.json` suffix off each one before parsing as i64
         // — for `/articles/{id}` URLs ending in `.json`, matchit's
