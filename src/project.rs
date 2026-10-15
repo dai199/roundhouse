@@ -5939,6 +5939,14 @@ fn spinel_files(app: &App, fixture: &Path) -> Result<(Vec<(String, String)>, Vec
         "sig/test/",
         &mut files,
     )?;
+    // The scaffold's test/models and test/views are the blog's Article tests; an app without that model would stop `rake test` at `require "models/article"`.
+    if !app.models.iter().any(|m| m.name.0.as_str() == "Article") {
+        files.retain(|(path, _)| {
+            !["test/models/", "test/views/", "sig/test/models/", "sig/test/views/"]
+                .iter()
+                .any(|dir| path.starts_with(dir))
+        });
+    }
 
     crate::runtime_files::walk_flat("runtime/spinel", &["rb"], "runtime/", &mut files)?;
 
