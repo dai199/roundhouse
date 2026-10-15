@@ -59,3 +59,19 @@ fn nested_values_encode_on_go() {
     run(&emitted, "go", &["mod", "tidy"]);
     run(&emitted, "go", &["test", "./app/v2/", "-run", "TestEncodeNestedValues"]);
 }
+
+#[test]
+#[ignore = "requires .NET; builds an emitted app"]
+fn nested_values_encode_on_csharp() {
+    let (emitted, errors) = emit_and_run::real_blog().emit(BuildTarget::CSharp);
+    assert!(errors.is_empty(), "{errors:?}");
+    // A `List<long>` too: it is no `IEnumerable<object>`, so a generic pattern would miss it.
+    std::fs::write(
+        emitted.join("tests/JsonBuilderNestedValuesTest.cs"),
+        format!(
+            "using System.Collections.Generic;\nusing Xunit;\n\nnamespace Roundhouse;\n\npublic class JsonBuilderNestedValuesTest\n{{\n    [Fact]\n    public void NestedValues() {{\n        var v = new List<object?> {{ new List<object?> {{ \"b\", null }}, new List<object?> {{ 2L, 1.5 }}, new List<object?>(), \"x\", new Dictionary<string, object?> {{ [\"name\"] = \"b\" }} }};\n        Assert.Equal({EXPECTED:?}, JsonBuilder.EncodeValue(v));\n        Assert.Equal(\"[1,2]\", JsonBuilder.EncodeValue(new List<long> {{ 1L, 2L }}));\n    }}\n}}\n"
+        ),
+    )
+    .unwrap();
+    run(&emitted, "dotnet", &["test", "tests/App.Tests.csproj", "--filter", "FullyQualifiedName~JsonBuilderNestedValuesTest"]);
+}
