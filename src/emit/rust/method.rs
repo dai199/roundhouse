@@ -112,6 +112,14 @@ pub(super) fn emit_module_method(m: &MethodDef) -> Result<String, String> {
     // `_adapter_insert; end` in active_record/base.rb (load-bearing
     // empty per the spinel-AOT comment) take this path.
     let body = synthesize_default_body_if_empty(body, return_ty.as_ref());
+    // Not emitted: a unit fn whose whole body is `nil` would end on a `None` tail.
+    let body = if matches!(return_ty, Some(Ty::Nil))
+        && matches!(&*m.body.node, crate::expr::ExprNode::Lit { value: crate::expr::Literal::Nil })
+    {
+        String::new()
+    } else {
+        body
+    };
     for line in body.lines() {
         writeln!(out, "    {line}").unwrap();
     }

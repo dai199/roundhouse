@@ -1202,6 +1202,10 @@ fn indent4(s: &str) -> String {
 /// compiles.
 fn emit_body(body: &Expr, returns_value: bool, ret_ty: Option<&Ty>) -> String {
     if !returns_value {
+        // Not emit_expr: a lone `nil` statement has no contextual type in Swift.
+        if is_empty_body(body) {
+            return String::new();
+        }
         return emit_expr(body);
     }
     if is_empty_body(body) {
