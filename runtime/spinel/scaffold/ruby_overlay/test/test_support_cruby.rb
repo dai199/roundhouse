@@ -30,9 +30,12 @@ end
 # descendant selector read from it would answer for the whole page.
 require "nokogiri"
 
+# Not Nokogiri::HTML5 outright: JRuby's Nokogiri has no HTML5 parser, and rails-dom-testing falls back to HTML4 there too.
+RH_HTML_FRAGMENT = Nokogiri.respond_to?(:uses_gumbo?) && Nokogiri.uses_gumbo? ? Nokogiri::HTML5 : Nokogiri::HTML4
+
 class TestBase
   def css_select(selector)
-    Nokogiri::HTML5.fragment(@__response.body.to_s).css(selector).to_a
+    RH_HTML_FRAGMENT.fragment(@__response.body.to_s).css(selector).to_a
   end
 end
 
@@ -260,12 +263,12 @@ module RequestDispatch
       return super unless block
       super(selector_or_root, content_or_opts, opts, &nil)
       if selector_or_root.is_a?(String)
-        root = Nokogiri::HTML5.fragment(@__response.body.to_s)
+        root = RH_HTML_FRAGMENT.fragment(@__response.body.to_s)
         selector = selector_or_root
         substitute = content_or_opts
       else
         root = selector_or_root
-        root = Nokogiri::HTML5.fragment(root.to_s) if root.is_a?(String)
+        root = RH_HTML_FRAGMENT.fragment(root.to_s) if root.is_a?(String)
         selector = content_or_opts
         substitute = opts
       end
