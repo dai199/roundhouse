@@ -1,0 +1,73 @@
+name: audit census
+
+# Runs `check` and the emitted-method audit over the public apps the
+# census tracks, pinned, on the fork: the local machine stays idle.
+on:
+  push:
+    branches: ['census/**']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-rust
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --bin roundhouse
+      - uses: actions/upload-artifact@v7
+        with:
+          name: roundhouse
+          path: target/release/roundhouse
+
+  app:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: forem, repo: forem/forem, sha: a017edafe6291761cbdb54e064d76fb76ee651ee }
+          - { name: discourse, repo: discourse/discourse, sha: 3b7add4745d2c1fc0fff441449472debe3af5a5d }
+          - { name: mastodon, repo: mastodon/mastodon, sha: bc0df90b8d49b4e75f6b2ca17df7557986e0cee3 }
+          - { name: chatwoot, repo: chatwoot/chatwoot, sha: ed7b122d27712b0d11728a6568d5000bec615701 }
+          - { name: maybe, repo: maybe-finance/maybe, sha: 77b5469832758d1cbee1a940f3012a1ae1c74cd3 }
+          - { name: lobsters, repo: lobsters/lobsters, sha: 9fefd21bee25e4b4fddcfc318023b2d8cd7d8a5e }
+          - { name: once-campfire, repo: basecamp/once-campfire, sha: d2155e85a01b8439c32a3604ebb7f39fea1ace0f }
+    steps:
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4'
+      - uses: actions/download-artifact@v8
+        with:
+          name: roundhouse
+      - name: Fetch ${{ matrix.name }}
+        run: |
+          git init -q app && cd app
+          git remote add origin https://github.com/${{ matrix.repo }}.git
+          git fetch -q --depth 1 origin ${{ matrix.sha }}
+          git checkout -q FETCH_HEAD
+      - name: Check and audit
+        run: |
+          chmod +x roundhouse
+          ./roundhouse check --continue --no-hotspots app > check.txt 2>&1 || true
+          ROUNDHOUSE_AUDIT=1 ./roundhouse --target ruby --survey --allow-unsupported app -o out > /dev/null 2> emit.txt || true
+          grep -E "is called, but the emitted Ruby" emit.txt | sed "s|$PWD/app/||" > audit.txt || true
+          {
+            echo "${{ matrix.name }}"
+            tail -1 check.txt
+            grep "roundhouse: audit:" emit.txt || echo "audit: did not run ($(tail -1 emit.txt))"
+          } > summary.txt
+          cat summary.txt
+          tar czf emitted.tgz out 2>/dev/null || true
+          sed -E 's/^[^ ]+ warning\[send_dispatch_failed\]: //' audit.txt | sed -E 's/`([^`#.]+)[#.]/`\1:/' | sort | uniq -c | sort -rn | head -40
+      - uses: actions/upload-artifact@v7
+        with:
+          name: census-${{ matrix.name }}
+          path: |
+            summary.txt
+            audit.txt
+            check.txt
+            emitted.tgz
