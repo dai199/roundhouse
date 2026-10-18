@@ -86,6 +86,21 @@ pub const REVERSE_MERGE: u64 = 1 << 16;
 /// calls: it only ever runs in the view, so it is ActionView's `t`.
 pub const HELPER_COPY_TRANSLATE: u64 = 1 << 17;
 
+/// A `t` in an `app/helpers` module's own body (or a parameter default),
+/// which the analyzer types with an includer as `self`: ActionView's `t`
+/// all the same.
+pub const HELPER_BODY_TRANSLATE: u64 = 1 << 18;
+
+/// A model's class-body `extend AppModule`, or a call after it to that
+/// module's own method (`load_settings(…)`): app code the Ruby family
+/// replays where the source has it (`ingest::app_extension_calls`).
+pub const REPLAYED_CLASS_BODY: u64 = 1 << 19;
+
+/// A model's `private :has_role?` naming a method its body does not
+/// define (generated, a superclass's or a gem's): kept as a statement for
+/// the lowering to apply and the analyzer to enforce.
+pub const INHERITED_VISIBILITY: u64 = 1 << 20;
+
 /// Whether `expr` is a [`SELF_BINDING`] cast.
 pub fn is_self_binding(expr: &Expr) -> bool {
     expr.decisions & SELF_BINDING != 0
