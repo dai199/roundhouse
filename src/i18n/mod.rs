@@ -39,6 +39,9 @@ pub struct Catalog {
     /// I18n answers them as they are, which `entries` cannot hold.
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     pub opaque: std::collections::BTreeSet<String>,
+    /// The opaque values a lookup can answer as they are, by key.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub values: BTreeMap<String, Opaque>,
     /// Each node's children in the order the files give them, as the
     /// deep merge of Ruby Hashes keeps it ("" for the locale's root).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -73,6 +76,46 @@ pub struct Catalog {
     /// `two` by the locale. A locale with none uses I18n's default.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub plurals: BTreeMap<String, String>,
+}
+
+/// A non-String value as I18n answers it: an Array of Strings and
+/// Symbols (`order: [:year, :month, :day]`), a number or a boolean.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Opaque {
+    /// Each item's text, `true` for a Symbol.
+    Array(Vec<(bool, String)>),
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+}
+
+impl Opaque {
+    fn from_yaml(value: &Value) -> Option<Opaque> {
+        match value {
+            Value::Bool(b) => Some(Opaque::Bool(*b)),
+            Value::Number(n) => n.as_i64().map(Opaque::Int).or_else(|| n.as_f64().map(Opaque::Float)),
+            Value::Sequence(items) => items.iter().map(|i| match i {
+                // A plain `:year` loads as a Symbol in Psych; serde's YAML keeps it a String with the colon.
+                Value::String(s) if s.chars().count() > 1 && s.starts_with(':') => Some((true, s[1..].to_string())),
+                Value::String(s) => Some((false, s.clone())),
+                _ => None,
+            }).collect::<Option<_>>().map(Opaque::Array),
+            _ => None,
+        }
+    }
+
+    /// The run-time table's kind letter, then the value's fields (an
+    /// item's `y` or `s` before its text).
+    pub fn fields(&self) -> Vec<String> {
+        match self {
+            Opaque::Array(items) => std::iter::once("A".to_string())
+                .chain(items.iter().map(|(sym, text)| format!("{}{text}", if *sym { 'y' } else { 's' })))
+                .collect(),
+            Opaque::Int(n) => vec!["I".into(), n.to_string()],
+            Opaque::Float(f) => vec!["F".into(), f.to_string()],
+            Opaque::Bool(b) => vec!["B".into(), b.to_string()],
+        }
+    }
 }
 
 /// `config.i18n.fallbacks`: Rails includes I18n's Fallbacks backend when
@@ -253,7 +296,7 @@ impl Catalog {
         let mut value: Value = serde_yaml_ng::from_str(source).map_err(|e| e.to_string())?;
         value.apply_merge().map_err(|e| e.to_string())?;
         if let Some(tree) = value.get(self.locale.as_str()) {
-            flatten(tree, String::new(), &mut Flat { entries: &mut self.entries, opaque: &mut self.opaque, order: &mut self.order });
+            flatten(tree, String::new(), &mut Flat { entries: &mut self.entries, opaque: &mut self.opaque, values: &mut self.values, order: &mut self.order });
         }
         Ok(())
     }
@@ -1019,6 +1062,7 @@ pub fn humanize(attr: &str) -> String {
 struct Flat<'a> {
     entries: &'a mut BTreeMap<String, String>,
     opaque: &'a mut std::collections::BTreeSet<String>,
+    values: &'a mut BTreeMap<String, Opaque>,
     order: &'a mut BTreeMap<String, Vec<String>>,
 }
 
@@ -1033,6 +1077,7 @@ impl Flat<'_> {
         let stale: Vec<String> = self.opaque.range(nested.clone()..).take_while(|k| k.starts_with(&nested)).cloned().collect();
         for k in stale {
             self.opaque.remove(&k);
+            self.values.remove(&k);
         }
         let stale: Vec<String> = self.order.range(nested.clone()..).take_while(|(k, _)| k.starts_with(&nested)).map(|(k, _)| k.clone()).collect();
         for k in stale {
@@ -1049,6 +1094,7 @@ fn flatten(value: &Value, prefix: String, out: &mut Flat<'_>) {
         Value::Mapping(map) => {
             out.entries.remove(&prefix);
             out.opaque.remove(&prefix);
+            out.values.remove(&prefix);
             // An empty mapping is still a node: I18n answers `{}` for it rather than falling back.
             if !prefix.is_empty() {
                 out.order.entry(prefix.clone()).or_default();
@@ -1071,6 +1117,7 @@ fn flatten(value: &Value, prefix: String, out: &mut Flat<'_>) {
         Value::String(s) => {
             out.clear_below(&prefix);
             out.opaque.remove(&prefix);
+            out.values.remove(&prefix);
             out.entries.insert(prefix, s.clone());
         }
         Value::Tagged(t) => flatten(&t.value, prefix, out),
@@ -1079,10 +1126,15 @@ fn flatten(value: &Value, prefix: String, out: &mut Flat<'_>) {
             out.clear_below(&prefix);
             out.entries.remove(&prefix);
             out.opaque.remove(&prefix);
+            out.values.remove(&prefix);
         }
         _ => {
             out.clear_below(&prefix);
             out.entries.remove(&prefix);
+            match Opaque::from_yaml(value) {
+                Some(v) => out.values.insert(prefix.clone(), v),
+                None => out.values.remove(&prefix),
+            };
             out.opaque.insert(prefix);
         }
     }
