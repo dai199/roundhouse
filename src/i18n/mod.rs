@@ -90,13 +90,21 @@ pub enum Opaque {
 }
 
 impl Opaque {
-    fn from_yaml(value: &Value) -> Option<Opaque> {
+    fn from_yaml(value: &Value, colons: &Colons) -> Option<Opaque> {
         match value {
             Value::Bool(b) => Some(Opaque::Bool(*b)),
-            Value::Number(n) => n.as_i64().map(Opaque::Int).or_else(|| n.as_f64().map(Opaque::Float)),
+            Value::Number(n) if n.is_f64() => n.as_f64().map(Opaque::Float),
+            // Not `as_f64` for one past i64: a Float would not be the Integer I18n answers.
+            Value::Number(n) => n.as_i64().map(Opaque::Int),
             Value::Sequence(items) => items.iter().map(|i| match i {
-                // A plain `:year` loads as a Symbol in Psych; serde's YAML keeps it a String with the colon.
-                Value::String(s) if s.chars().count() > 1 && s.starts_with(':') => Some((true, s[1..].to_string())),
+                // The run-time table separates its fields and records with these.
+                Value::String(s) if s.chars().any(|c| ('\u{1c}'..='\u{1f}').contains(&c)) => None,
+                Value::String(s) if s.chars().count() > 1 && s.starts_with(':') => match (colons.quoted.contains(s), colons.plain.contains(s)) {
+                    (true, true) => None,
+                    (true, false) => Some((false, s.clone())),
+                    // A plain `:year` loads as a Symbol in Psych; serde's YAML keeps it a String with the colon.
+                    _ => Some((true, s[1..].to_string())),
+                },
                 Value::String(s) => Some((false, s.clone())),
                 _ => None,
             }).collect::<Option<_>>().map(Opaque::Array),
@@ -115,6 +123,36 @@ impl Opaque {
             Opaque::Float(f) => vec!["F".into(), f.to_string()],
             Opaque::Bool(b) => vec!["B".into(), b.to_string()],
         }
+    }
+}
+
+/// The `:`-led scalars a file writes quoted, which Psych loads as
+/// Strings, and those it writes plain, which it loads as Symbols.
+#[derive(Default)]
+struct Colons {
+    quoted: std::collections::HashSet<String>,
+    plain: std::collections::HashSet<String>,
+}
+
+impl Colons {
+    fn of(source: &str) -> Colons {
+        use yaml_rust2::parser::{Event, Parser};
+        use yaml_rust2::scanner::TScalarStyle;
+        let mut out = Colons::default();
+        let mut parser = Parser::new_from_str(source);
+        while let Ok((event, _)) = parser.next_token() {
+            match event {
+                Event::StreamEnd => break,
+                Event::Scalar(text, style, ..) if text.starts_with(':') => {
+                    match style {
+                        TScalarStyle::Plain => out.plain.insert(text),
+                        _ => out.quoted.insert(text),
+                    };
+                }
+                _ => {}
+            }
+        }
+        out
     }
 }
 
@@ -296,7 +334,8 @@ impl Catalog {
         let mut value: Value = serde_yaml_ng::from_str(source).map_err(|e| e.to_string())?;
         value.apply_merge().map_err(|e| e.to_string())?;
         if let Some(tree) = value.get(self.locale.as_str()) {
-            flatten(tree, String::new(), &mut Flat { entries: &mut self.entries, opaque: &mut self.opaque, values: &mut self.values, order: &mut self.order });
+            let colons = Colons::of(source);
+            flatten(tree, String::new(), &mut Flat { entries: &mut self.entries, opaque: &mut self.opaque, values: &mut self.values, order: &mut self.order, colons: &colons });
         }
         Ok(())
     }
@@ -1063,6 +1102,7 @@ struct Flat<'a> {
     entries: &'a mut BTreeMap<String, String>,
     opaque: &'a mut std::collections::BTreeSet<String>,
     values: &'a mut BTreeMap<String, Opaque>,
+    colons: &'a Colons,
     order: &'a mut BTreeMap<String, Vec<String>>,
 }
 
@@ -1131,7 +1171,7 @@ fn flatten(value: &Value, prefix: String, out: &mut Flat<'_>) {
         _ => {
             out.clear_below(&prefix);
             out.entries.remove(&prefix);
-            match Opaque::from_yaml(value) {
+            match Opaque::from_yaml(value, out.colons) {
                 Some(v) => out.values.insert(prefix.clone(), v),
                 None => out.values.remove(&prefix),
             };
@@ -1153,6 +1193,21 @@ mod tests {
 
     fn keys(k: &[&str]) -> Vec<String> {
         k.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn an_opaque_value_keeps_what_psych_loads() {
+        let c = catalog(&[(
+            "config/locales/en.yml",
+            "en:\n  plain:\n    - :year\n    - day\n  quoted:\n    - \":month\"\n    - ':day'\n  both:\n    - \":x\"\n    - :x\n  big: 18446744073709551615\n  ratio: 1.5\n  count: 3\n  split: [\"a\\x1Fb\"]\n",
+        )]);
+        assert_eq!(c.values.get("plain"), Some(&Opaque::Array(vec![(true, "year".into()), (false, "day".into())])));
+        assert_eq!(c.values.get("quoted"), Some(&Opaque::Array(vec![(false, ":month".into()), (false, ":day".into())])));
+        assert_eq!(c.values.get("ratio"), Some(&Opaque::Float(1.5)));
+        assert_eq!(c.values.get("count"), Some(&Opaque::Int(3)));
+        for key in ["both", "big", "split"] {
+            assert!(c.opaque.contains(key) && !c.values.contains_key(key), "{key}");
+        }
     }
 
     #[test]
