@@ -1309,7 +1309,8 @@ fn holder_of_target(target: &str, lock: Option<&crate::gems::Lockfile>, app_name
     if let Some(within) = target.strip_prefix("block:") {
         // `Devise.setup do |config| … end`: its statements belong to `Devise`.
         let recv = within.rsplit_once('.').map_or(within, |(recv, _)| recv);
-        return holder_of_target(recv, lock, app_namespaces);
+        // `within` is the head as written, not normalized: `::Devise.setup` keeps its `::`.
+        return holder_of_target(recv.trim_start_matches("::"), lock, app_namespaces);
     }
     if target.starts_with("self.") || target == "def" || target == "var=" || target.starts_with("const=") {
         return Holder::App;
@@ -1342,7 +1343,7 @@ fn holder_of_target(target: &str, lock: Option<&crate::gems::Lockfile>, app_name
                     .collect()
             })
             .unwrap_or_default();
-        return match gem_holder(railtie) {
+        return match gem_holder(railtie, lock) {
             Some(Holder::Gem { fate: crate::gems::GemFate::Framework, .. }) => Holder::Rails(format!("config.{key}")),
             Some(other) => other,
             None => Holder::Unknown,
@@ -1358,7 +1359,7 @@ fn holder_of_target(target: &str, lock: Option<&crate::gems::Lockfile>, app_name
         return Holder::RailsBootOnly(head);
     }
     let gems = lock.map(|l| crate::gems::lock_gems_owning_constant(l, &head)).unwrap_or_default();
-    if let Some(holder) = gem_holder(gems.into_iter().map(str::to_string).collect()) {
+    if let Some(holder) = gem_holder(gems.into_iter().map(str::to_string).collect(), lock) {
         match holder {
             Holder::Gem { fate: crate::gems::GemFate::Framework, .. } => return Holder::Rails(head),
             other => return other,
@@ -1375,10 +1376,15 @@ fn holder_of_target(target: &str, lock: Option<&crate::gems::Lockfile>, app_name
 }
 
 /// The gems of `names` as one holder: their fate when they agree.
-fn gem_holder(names: Vec<String>) -> Option<Holder> {
+fn gem_holder(names: Vec<String>, lock: Option<&crate::gems::Lockfile>) -> Option<Holder> {
+    // As `GemCensus::of` labels it: a gem locked from a `PATH` source is in-repo.
+    let fate_of = |n: &str| match lock {
+        Some(l) if l.is_in_repo(n) => crate::gems::GemFate::InRepo,
+        _ => crate::gems::fate_of(n),
+    };
     let first = names.first()?;
-    let fate = crate::gems::fate_of(first);
-    let fate = if names.iter().all(|n| crate::gems::fate_of(n) == fate) { fate } else { crate::gems::GemFate::Unknown };
+    let fate = fate_of(first);
+    let fate = if names.iter().all(|n| fate_of(n) == fate) { fate } else { crate::gems::GemFate::Unknown };
     Some(Holder::Gem { names, fate })
 }
 

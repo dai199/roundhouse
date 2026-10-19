@@ -521,3 +521,16 @@ end
     assert!(middleware.message.ends_with("it is Rails behaviour the running app answers without"), "{}", middleware.message);
     assert!(ledger[5].message.ends_with("it belongs to the gem `rack-attack` (unknown)"), "{}", ledger[5].message);
 }
+
+#[test]
+fn a_rooted_configure_block_and_an_in_repo_gem_keep_their_gems() {
+    let (_, ledger) = ingest(&[
+        ("Gemfile.lock", "PATH\n  remote: vendor/catalog\n  specs:\n    catalog (0.1.0)\n\nGEM\n  remote: https://rubygems.org/\n  specs:\n    devise (4.9.4)\n\nDEPENDENCIES\n  catalog!\n  devise\n"),
+        (
+            "config/initializers/boot.rb",
+            "::Devise.setup do |config|\n  config.password_length = 8..128\nend\nCatalog.configure do |c|\n  c.size = 3\nend\n",
+        ),
+    ]);
+    let got: Vec<(&str, &str)> = ledger.iter().map(|d| (statement(d), holder(d))).collect();
+    assert_eq!(got, [("config.password_length =", "gem:devise:modeled"), ("c.size =", "gem:catalog:in-repo")]);
+}
