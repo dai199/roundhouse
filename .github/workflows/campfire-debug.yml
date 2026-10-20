@@ -1,0 +1,91 @@
+# Fork-only: builds Campfire under Spinel, walks the cable lane, and keeps
+# the frames and server logs. Not for upstream.
+name: Campfire Spinel debug
+
+on:
+  push:
+    branches: ['debug/campfire*']
+
+env:
+  MRI_RUBY: '3.4'
+  CAMPFIRE_SHA: 11d3fb9ce01faad3384807563053ba86126f747e
+  SPINEL_REF: master
+  BUNDLE_PATH: vendor/bundle
+  MAKEFLAGS: "-j4"
+
+jobs:
+  campfire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    services:
+      redis:
+        image: mirror.gcr.io/library/redis
+        ports: ['6379:6379']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: matz/spinel
+          ref: ${{ env.SPINEL_REF }}
+          path: spinel-src
+      - name: Build Spinel
+        run: |
+          make -C spinel-src deps
+          make -C spinel-src all
+          echo "$PWD/spinel-src/bin" >> "$GITHUB_PATH"
+          git -C spinel-src log -1 --format='spinel %H %s'
+      - uses: ./.github/actions/setup-rust
+      - uses: Swatinem/rust-cache@v2
+      - name: Build roundhouse
+        run: |
+          cargo build --locked --bin roundhouse
+          echo "ROUNDHOUSE_BIN=$PWD/target/debug/roundhouse" >> "$GITHUB_ENV"
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ env.MRI_RUBY }}
+      - name: System packages
+        timeout-minutes: 20
+        uses: ./.github/actions/ci-apt-install-cached
+        with:
+          packages: libvips-dev libsqlite3-dev libjemalloc-dev sqlite3
+      - name: Fetch pinned once-campfire
+        run: |
+          curl -fsSL "https://codeload.github.com/basecamp/once-campfire/tar.gz/${CAMPFIRE_SHA}" -o /tmp/campfire.tar.gz
+          mkdir -p /tmp/campfire && tar -xzf /tmp/campfire.tar.gz -C /tmp/campfire --strip-components=1
+      - name: Emit and build
+        timeout-minutes: 40
+        run: |
+          set -o pipefail
+          spinel --version
+          "$ROUNDHOUSE_BIN" --target spinel /tmp/campfire -o build/campfire-compare-spinel --allow-unsupported 2>&1 | tee campfire-emit.log
+          make -C build/campfire-compare-spinel build 2>&1 | tee campfire-build.log
+      - name: Cache the prepared oracle
+        id: oracle
+        uses: actions/cache@v6
+        with:
+          path: build/campfire-oracle
+          key: campfire-oracle-${{ env.CAMPFIRE_SHA }}-ruby${{ env.MRI_RUBY }}-v1
+      - name: Prepare the Rails oracle
+        if: steps.oracle.outputs.cache-hit != 'true'
+        timeout-minutes: 15
+        run: scripts/campfire-oracle prepare --app /tmp/campfire
+      - name: Walk gems
+        run: gem install websocket-driver --no-document
+      - name: Walk the binary
+        continue-on-error: true
+        timeout-minutes: 20
+        run: scripts/campfire-compare --reuse "$PWD/build/campfire-compare-spinel" --spinel /tmp/campfire
+      - name: Collect
+        if: always()
+        run: |
+          mkdir -p debug-out
+          cp campfire-emit.log campfire-build.log debug-out/ 2>/dev/null || true
+          cp -R build/campfire-compare-spinel-dumps debug-out/dumps 2>/dev/null || true
+          tar -czf debug-out/emitted-sources.tgz -C build/campfire-compare-spinel \
+            main.rb boot.rb app config lib runtime sig 2>/dev/null || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: campfire-debug
+          path: debug-out
+          retention-days: 7
