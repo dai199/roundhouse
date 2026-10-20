@@ -107,7 +107,7 @@ jobs:
         env:
           CI_FULL: ${{ inputs.full || false }}
           CI_PUBLISH: ${{ inputs.publish || false }}
-          CI_SPINEL_REVISION: ${{ inputs.spinel_revision }}
+          CI_SPINEL_REVISION: ${{ inputs.spinel_revision || '0ef94e685a7a2e793ed0871614065919c94a0b71' }}
           CI_SPINEL_TIMINGS_FILE: .ci-timings/spinel-timings.json
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/ci-plan.py plan
