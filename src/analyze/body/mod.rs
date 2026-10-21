@@ -1891,6 +1891,10 @@ impl<'a> BodyTyper<'a> {
                                 && self.is_instance(receiver, ctx);
                         }
                     }
+                    // A `Module.new`/`Class.new` block is the new class's body, so its `include` is that class's ancestry
+                    if method.as_str() == "new" && class_object_receiver {
+                        block_ctx.method_body = false;
+                    }
                     let method_ref_ty = self.analyze_expr(b, &block_ctx);
                     // The Lambda walker stores the analyzed body's type
                     // on the body expr itself. `map`/`collect`/similar
