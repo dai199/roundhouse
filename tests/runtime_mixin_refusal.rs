@@ -56,7 +56,8 @@ fn a_class_body_mixin_a_hook_a_built_class_and_a_class_own_include_stay_clean() 
            def self.include(name) = name.to_s\n\n  \
            def self.add_filter(filter)\n    include(filter)\n  end\n\n  \
            def self.inherited(base)\n    base.include(UpFilter)\n    Strainer.extend(UpFilter)\n  end\n\n  \
-           def self.build\n    klass = Class.new\n    klass.include(UpFilter)\n    klass\n  end\n\
+           def self.build\n    klass = Class.new\n    klass.include(UpFilter)\n    klass\n  end\n\n  \
+           def self.[](name)\n    Module.new do\n      extend ActiveSupport::Concern\n      include UpFilter\n    end\n  end\n\
          end\n",
     );
     assert!(found.is_empty(), "{found:?}");
