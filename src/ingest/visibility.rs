@@ -556,7 +556,9 @@ impl Visibility {
         // class must not privatize def self.x or leak into class_methods.
         let mut default = MethodVisibility::Public;
         let mut module_function = false;
-        for statement in flatten_statements(body) {
+        let statements = flatten_statements(body);
+        let folds = super::util::folds_class_methods(&statements);
+        for statement in statements {
             let offset = statement.location().start_offset();
             self.defaults.insert(offset, default);
             let def = definition(&statement);
@@ -716,7 +718,7 @@ impl Visibility {
                 continue;
             }
             if let Some(module) = node.as_module_node() {
-                if module_name_path(&module).as_deref() == Some(&["ClassMethods".to_string()]) {
+                if folds && module_name_path(&module).as_deref() == Some(&["ClassMethods".to_string()]) {
                     self.walk_carrier(module.body(), file)?;
                 }
                 continue;

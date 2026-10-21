@@ -515,9 +515,53 @@ fn body_has_included_block(body: Option<Node<'_>>) -> bool {
 /// enclosing scope: a direct `def`, an `attr_*` call, or a
 /// `class << self` block whose body contains the same. Used to decide
 /// whether a module is worth surfacing as a `LibraryClass`.
+
+// Only ActiveSupport::Concern and the `included` bridge make it one: a `prepended`/`extended` hook or a manual extend needs the real module
+pub(super) fn folds_class_methods(statements: &[Node<'_>]) -> bool {
+    statements.iter().any(|stmt| {
+        if let Some(call) = stmt.as_call_node()
+            && call.receiver().is_none()
+            && constant_id_str(&call.name()) == "extend"
+            && let Some(args) = call.arguments()
+        {
+            return args.arguments().iter().any(|arg| {
+                constant_path_of(&arg).is_some_and(|path| {
+                    path.iter().filter(|seg| !seg.is_empty()).map(String::as_str).eq(["ActiveSupport", "Concern"])
+                })
+            });
+        }
+        let Some(def) = stmt.as_def_node() else { return false };
+        if def.receiver().is_none_or(|r| r.as_self_node().is_none()) || constant_id_str(&def.name()) != "included" {
+            return false;
+        }
+        struct ExtendsCarrier(bool);
+        impl<'pr> ruby_prism::Visit<'pr> for ExtendsCarrier {
+            fn visit_call_node(&mut self, node: &ruby_prism::CallNode<'pr>) {
+                if constant_id_str(&node.name()) == "extend"
+                    && node.arguments().is_some_and(|args| {
+                        args.arguments().iter().any(|arg| {
+                            constant_path_of(&arg).is_some_and(|path| path.last().is_some_and(|last| last == "ClassMethods"))
+                        })
+                    })
+                {
+                    self.0 = true;
+                }
+                ruby_prism::visit_call_node(self, node);
+            }
+        }
+        let mut found = ExtendsCarrier(false);
+        if let Some(body) = def.body() {
+            ruby_prism::Visit::visit(&mut found, &body);
+        }
+        found.0
+    })
+}
+
 fn body_has_direct_method_decl(body: Option<Node<'_>>) -> bool {
     let Some(body) = body else { return false };
-    for stmt in flatten_statements(body) {
+    let statements = flatten_statements(body);
+    let folds = folds_class_methods(&statements);
+    for stmt in statements {
         if super::visibility::definition(&stmt).is_some() {
             return true;
         }
@@ -565,7 +609,8 @@ fn body_has_direct_method_decl(body: Option<Node<'_>>) -> bool {
         // methods — and skipping it would drop them entirely, since the
         // nested module is deliberately not surfaced on its own.
         if let Some(m) = stmt.as_module_node() {
-            if module_name_path(&m).as_deref() == Some(&["ClassMethods".to_string()])
+            if folds
+                && module_name_path(&m).as_deref() == Some(&["ClassMethods".to_string()])
                 && body_has_direct_method_decl(m.body())
             {
                 return true;
