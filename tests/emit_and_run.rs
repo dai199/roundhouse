@@ -31,8 +31,6 @@ mod branch_local_join;
 mod utc_zone_time;
 #[path = "emit_and_run/discard.rs"]
 mod discard;
-#[path = "emit_and_run/class_methods_carrier.rs"]
-mod class_methods_carrier;
 #[path = "emit_and_run/pundit_source.rs"]
 mod pundit_source;
 #[path = "emit_and_run/source_gem_autoload.rs"]

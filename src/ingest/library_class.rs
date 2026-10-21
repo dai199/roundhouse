@@ -101,28 +101,6 @@ pub fn ingest_nested_library_classes(
     ingest_library_classes_impl(source, file, Some(outer))
 }
 
-fn class_methods_folding_owners(root: &ruby_prism::Node<'_>) -> HashSet<String> {
-    let mut owners = HashSet::new();
-    let folds = |body: Option<ruby_prism::Node<'_>>| {
-        body.is_some_and(|body| super::util::folds_class_methods(&flatten_statements(body)))
-    };
-    for (scope, module) in super::util::find_all_modules_with_scope(root) {
-        if let Some(path) = module_name_path(&module)
-            && folds(module.body())
-        {
-            owners.insert(scope.iter().chain(path.iter()).cloned().collect::<Vec<_>>().join("::"));
-        }
-    }
-    for (scope, class) in find_all_classes_with_scope(root) {
-        if let Some(path) = class_name_path(&class)
-            && folds(class.body())
-        {
-            owners.insert(scope.iter().chain(path.iter()).cloned().collect::<Vec<_>>().join("::"));
-        }
-    }
-    owners
-}
-
 /// `nested_in`: `None` walks every declaration; `Some(outer)` walks
 /// only nested ones and top-level compact names under `outer`.
 fn ingest_library_classes_impl(
@@ -140,7 +118,6 @@ fn ingest_library_classes_impl(
     super::sources::register(file, &String::from_utf8_lossy(source));
     let result = super::prism::parse(source, file);
     let root = result.node();
-    let folding_owners = class_methods_folding_owners(&root);
     let mut out = Vec::new();
     for (scope, class) in find_all_classes_with_scope(&root)
         .into_iter()
@@ -174,7 +151,6 @@ fn ingest_library_classes_impl(
         // Emitting it separately would define every method twice.
         if !scope.is_empty()
             && module_name_path(&module).as_deref() == Some(&["ClassMethods".to_string()])
-            && folding_owners.contains(&scope.join("::"))
         {
             continue;
         }
@@ -2161,7 +2137,6 @@ fn walk_decl_body_with_visibility<'pr>(
     };
 
     let statements = flatten_statements(b);
-    let folds_carrier = super::util::folds_class_methods(&statements);
     if let Some(name) = super::util::hoisted_name_collision(&statements) {
         return Err(IngestError::Unsupported {
             file: file.into(),
@@ -2171,7 +2146,7 @@ fn walk_decl_body_with_visibility<'pr>(
             ),
         });
     }
-    let has_class_methods = folds_carrier && statements.iter().any(|stmt| stmt.as_module_node()
+    let has_class_methods = statements.iter().any(|stmt| stmt.as_module_node()
         .is_some_and(|m| module_name_path(&m).as_deref() == Some(&["ClassMethods".to_string()])));
     // An ActiveSupport::Concern's `included do def x … end end` defines `x`
     // on every includer. Hoisted into the module's own instance methods it
@@ -2206,8 +2181,7 @@ fn walk_decl_body_with_visibility<'pr>(
     let concern_class_defs: Option<HashSet<String>> = concern_direct_defs.as_ref().map(|_| {
         let mut names = HashSet::new();
         for stmt in &statements {
-            if folds_carrier
-                && let Some(m) = stmt.as_module_node()
+            if let Some(m) = stmt.as_module_node()
                 && module_name_path(&m).as_deref() == Some(&["ClassMethods".to_string()])
             {
                 concern_carrier_def_names(m.body(), &mut names);
@@ -2437,7 +2411,7 @@ fn walk_decl_body_with_visibility<'pr>(
         // `ingest_library_classes` skips the nested module for this
         // reason — otherwise the same defs would emit twice.
         if let Some(m) = stmt.as_module_node() {
-            if folds_carrier && module_name_path(&m).as_deref() == Some(&["ClassMethods".to_string()]) {
+            if module_name_path(&m).as_deref() == Some(&["ClassMethods".to_string()]) {
                 let class_methods = walk_decl_body_with_visibility(m.body(), owner, file, DeclBodyMode::ClassMethods, visibility)?;
                 // ClassMethods methods materialize on the enclosing module.
                 // Mattr/cattr `@@attr = nil` seeds (synthetic or matching a
@@ -3926,13 +3900,12 @@ pub fn ingest_concern_class_method_spans(
 
     let result = parse(source);
     let root = result.node();
-    let folding_owners = class_methods_folding_owners(&root);
     let mut out = Vec::new();
     for (scope, module) in find_all_module_declarations_with_scope(&root) {
         let Some(name_path) = module_name_path(&module) else { continue };
         // A nested `ClassMethods` is reported under its PARENT, which is
         // the module an app actually includes.
-        if name_path.as_slice() == ["ClassMethods".to_string()] && !scope.is_empty() && folding_owners.contains(&scope.join("::")) {
+        if name_path.as_slice() == ["ClassMethods".to_string()] && !scope.is_empty() {
             continue;
         }
         let mut full_path: Vec<String> = scope.clone();
@@ -3946,11 +3919,9 @@ pub fn ingest_concern_class_method_spans(
         let mut concern_extensions = Vec::new();
         let mut concern_calls = Vec::new();
         let mut has_other_extensions = false;
-        let statements = flatten_statements(body);
-        let folds = super::util::folds_class_methods(&statements);
-        for stmt in statements {
+        for stmt in flatten_statements(body) {
             if let Some(m) = stmt.as_module_node() {
-                if folds && module_name_path(&m).as_deref() == Some(&["ClassMethods".to_string()]) {
+                if module_name_path(&m).as_deref() == Some(&["ClassMethods".to_string()]) {
                     has_nested_carrier = true;
                     defs_in(m.body(), file, &mut spans);
                 }
