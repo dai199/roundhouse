@@ -101,8 +101,25 @@ module Arel
       @qualified
     end
 
+    # A subquery (anything with `to_sql`), or a list of values, which an
+    # empty list makes match nothing, as Rails renders it.
     def in(subquery)
-      "#{@qualified} IN (#{subquery.to_sql})"
+      return "#{@qualified} IN (#{subquery.to_sql})" unless subquery.is_a?(Array)
+      return "1=0" if subquery.empty?
+      "#{@qualified} IN (#{subquery.map { |v| Nodes.embed(v) }.join(", ")})"
+    end
+
+    def eq(value)
+      return Nodes::Predicate.new("#{@qualified} IS NULL") if value.nil?
+      Nodes::Predicate.new("#{@qualified} = #{Nodes.embed(value)}")
+    end
+
+    # Rails' SQLite and MySQL visitors render LIKE whatever
+    # `case_sensitive` says; only PostgreSQL's turns it into ILIKE.
+    def matches(pattern, escape = nil, _case_sensitive = false)
+      sql = "#{@qualified} LIKE #{Nodes.embed(pattern)}"
+      sql = "#{sql} ESCAPE #{Nodes.embed(escape)}" unless escape.nil?
+      Nodes::Predicate.new(sql)
     end
 
     def not_in(subquery)
@@ -253,6 +270,25 @@ module Arel
 
       def to_sql
         to_s
+      end
+    end
+
+    # A WHERE predicate (`attr.eq(v)`) that combines with another.
+    class Predicate < Node
+      def initialize(sql)
+        @sql = sql
+      end
+
+      def to_s
+        @sql
+      end
+
+      def or(other)
+        Predicate.new("(#{@sql} OR #{other})")
+      end
+
+      def and(other)
+        Predicate.new("(#{@sql} AND #{other})")
       end
     end
 

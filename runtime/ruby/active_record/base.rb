@@ -444,6 +444,16 @@ module ActiveRecord
       raise NotImplementedError, "#{name}.schema_columns must be overridden"
     end
 
+    def self.schema_column_types
+      {}
+    end
+
+    # Rails' `type_for_attribute(name).type`: the column's type name, nil
+    # for a name that is no column.
+    def self.type_for_attribute(name)
+      ActiveRecord::Type::Value.new(schema_column_types[name.to_sym])
+    end
+
     # The column this model treats as its identity. Unlike its
     # neighbours this one does NOT raise unoverridden: Rails' default is
     # `id` and almost every model takes it, so the lowering emits an
@@ -686,6 +696,14 @@ module ActiveRecord
       raise NotImplementedError, "[]= must be overridden by subclass"
     end
 
+    def read_attribute(name)
+      self[name]
+    end
+
+    def write_attribute(name, value)
+      self[name] = value
+    end
+
     # `record.has_attribute?(:token)` — does this model carry that
     # column? Answered from `schema_columns` rather than the
     # `attributes` hash, which is what Rails consults: the emitted
@@ -769,6 +787,12 @@ module ActiveRecord
 
     def self.all
       _adapter_all
+    end
+
+    # Rails' `default_scoped`: `all` with the model's `default_scope`,
+    # which this runtime does not model (a declared one is reported).
+    def self.default_scoped
+      all
     end
 
     def self.find(id)
@@ -992,6 +1016,10 @@ module ActiveRecord
       {}
     end
 
+    def saved_changes?
+      !saved_changes.empty?
+    end
+
     # ONE leading underscore, like `_adapter_*` beside it: this is
     # called ACROSS the class boundary (a model's `from_row` reaching
     # Base's method), and Python mangles a `__`-prefixed name per class
@@ -1123,6 +1151,13 @@ module ActiveRecord
     def attribute_was(name)
       changes = changes_to_save
       changes[name]
+    end
+
+    # Rails' `attribute_in_database`: the stored value, before any change
+    # pending on this record. The changes are String-keyed; Rails takes a
+    # Symbol as well.
+    def attribute_in_database(name)
+      attribute_was(name.to_s)
     end
 
     # `id` never appears in the subclass `attributes` hash, so the

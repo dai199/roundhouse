@@ -374,7 +374,7 @@ impl Analyzer {
             }
             // `ActiveModel::Name`, the `Type::Value`s and the enum table are
             // objects the registry does not model.
-            for opaque in ["model_name", "attribute_types", "type_for_attribute", "defined_enums", "reset_column_information"] {
+            for opaque in ["model_name", "attribute_types", "defined_enums", "reset_column_information"] {
                 cls.class_methods.insert(Symbol::from(opaque), Ty::Untyped);
             }
             // The rest of the class-side query surface — everything
@@ -391,6 +391,7 @@ impl Analyzer {
                 // common bare/chained use.) `delete_all`/`update_all` return
                 // Int (affected row count).
                 cls.class_methods.insert(Symbol::from("unscoped"), relation_of_self.clone());
+                cls.class_methods.insert(Symbol::from("default_scoped"), relation_of_self.clone());
                 cls.class_methods.insert(Symbol::from("none"), relation_of_self.clone());
                 cls.class_methods.insert(Symbol::from("delete_all"), Ty::Int);
                 cls.class_methods.insert(Symbol::from("update_all"), Ty::Int);

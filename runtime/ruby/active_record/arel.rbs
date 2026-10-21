@@ -37,7 +37,11 @@ module Arel
 
     def to_s: () -> String
 
-    def in: (ActiveRecord::Relation | SelectManager subquery) -> String
+    def in: (ActiveRecord::Relation | SelectManager | Array[untyped] subquery) -> String
+
+    def eq: (untyped value) -> Nodes::Predicate
+
+    def matches: (String pattern, ?String? escape, ?bool _case_sensitive) -> Nodes::Predicate
 
     def not_in: (ActiveRecord::Relation | SelectManager subquery) -> String
   end
@@ -57,6 +61,14 @@ module Arel
     class Node
       def to_s: () -> String
       def to_sql: () -> String
+    end
+
+    class Predicate < Node
+      @sql: String
+      def initialize: (String sql) -> void
+      def to_s: () -> String
+      def or: (Node | String other) -> Predicate
+      def and: (Node | String other) -> Predicate
     end
 
     class SqlLiteral < Node
