@@ -178,6 +178,8 @@ pub struct Ctx {
     pub claimed_macro_template: bool,
     // `!class_side` cannot stand in: scope bodies type with it false, and their bare `active` is the scope.
     pub instance_body: bool,
+    // `class_side` cannot stand in: a `class_eval` block in an initializer is class-side too, and its `include` runs at load
+    pub method_body: bool,
 }
 
 /// User-class dispatch data: table name (if any), instance shape,
@@ -2347,6 +2349,18 @@ impl<'a> BodyTyper<'a> {
                 let class_object_receiver = class_object_receiver
                     || (recv.as_ref().is_none_or(|r| matches!(&*r.node, ExprNode::SelfRef))
                         && send::is_module_protocol(method) && self.self_is_module_instance(ctx));
+                if ctx.method_body && class_object_receiver && self.inquirers.is_some() && !ctx.claimed_macro_template
+                    && matches!(method.as_str(), "include" | "prepend" | "extend")
+                    && !self.owns_operator(recv_ty.as_ref().or(ctx.self_ty.as_ref().filter(|_| recv.is_none())), method, true)
+                {
+                    crate::expr::ExprCold::set_diagnostic(&mut expr.cold, Some(crate::diagnostic::DiagnosticKind::Unsupported {
+                        target: None,
+                        construct: Symbol::from(format!("Module#{} at run time", method.as_str())),
+                        detail: "a method that mixes a module into a live class needs a method table that changes \
+                                 while the program runs, which no compiled target has".to_string(),
+                    }));
+                    return dispatched;
+                }
                 if matches!(dispatched, Ty::Var { .. } | Ty::Untyped) && self.inquirers.is_some()
                     && (recv.is_some() || (ctx.self_ty.is_some() && send::is_module_protocol(method)))
                     && !self.owns_operator(recv_ty.as_ref(), method, class_object_receiver) {
