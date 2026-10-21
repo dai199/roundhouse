@@ -4503,7 +4503,11 @@ impl Analyzer {
         let mut ctx = base.clone();
         ctx.class_side = matches!(method.receiver, crate::dialect::MethodReceiver::Class);
         ctx.instance_body = !ctx.class_side;
-        ctx.method_body = true;
+        // A Module hook runs while the includer's body loads, so its mixin is that class's ancestry, not a change to a live class
+        ctx.method_body = !matches!(
+            method.name.as_str(),
+            "included" | "extended" | "prepended" | "inherited" | "append_features" | "prepend_features" | "extend_object"
+        );
         // Class-method bodies named after a first-class model DSL
         // (`has_markdown`, `has_rich_text`, …) are macro templates —
         // association/`scope` leftovers inside them are claimed at

@@ -31,7 +31,7 @@ fn refusals(strainer: &str) -> Vec<String> {
     diagnose(&app)
         .iter()
         .map(|d| d.to_string())
-        .filter(|d| d.contains("at run time"))
+        .filter(|d| d.contains("Module mixin at run time"))
         .collect()
 }
 
@@ -44,21 +44,19 @@ fn a_mixin_a_method_runs_is_refused_at_the_call() {
            def self.wrap\n    Strainer.prepend(UpFilter)\n  end\n\
          end\n",
     );
-    for construct in ["Module#include at run time", "Module#extend at run time", "Module#prepend at run time"] {
-        assert_eq!(
-            found.iter().filter(|d| d.contains(construct)).count(),
-            1,
-            "{construct} once in {found:?}"
-        );
+    for method in ["`include`", "`extend`", "`prepend`"] {
+        assert_eq!(found.iter().filter(|d| d.contains(method)).count(), 1, "{method} once in {found:?}");
     }
 }
 
 #[test]
-fn a_class_body_mixin_and_a_class_own_include_stay_clean() {
+fn a_class_body_mixin_a_hook_a_built_class_and_a_class_own_include_stay_clean() {
     let found = refusals(
         "class Strainer\n  include UpFilter\n\n  \
            def self.include(name) = name.to_s\n\n  \
-           def self.add_filter(filter)\n    include(filter)\n  end\n\
+           def self.add_filter(filter)\n    include(filter)\n  end\n\n  \
+           def self.inherited(base)\n    base.include(UpFilter)\n    Strainer.extend(UpFilter)\n  end\n\n  \
+           def self.build\n    klass = Class.new\n    klass.include(UpFilter)\n    klass\n  end\n\
          end\n",
     );
     assert!(found.is_empty(), "{found:?}");
