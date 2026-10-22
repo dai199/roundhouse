@@ -158,8 +158,6 @@ module ActiveRecord
     def self._friendly_slug_column: () -> String
     def self._friendly_history: () -> bool
     def self.schema_columns: () -> Array[Symbol]
-    def self.schema_column_types: () -> Hash[Symbol, Symbol]
-    def self.type_for_attribute: (String name) -> ActiveRecord::Type::Value
     def self.schema_time_columns: () -> Array[Symbol]
     def self.schema_date_columns: () -> Array[Symbol]
     def self.schema_boolean_columns: () -> Array[Symbol]
@@ -179,7 +177,6 @@ module ActiveRecord
     # Saved-change tracking (ActiveModel::Dirty subset) — see save.
     def __track_saved_changes: (bool was_new) -> void
     def saved_changes: () -> Hash[String, untyped]
-    def saved_changes?: () -> bool
     def _note_hydrated: () -> void
     def attribute_previously_was: (String name) -> untyped
     def saved_change_to_attribute?: (Symbol name) -> bool
@@ -189,7 +186,6 @@ module ActiveRecord
     def changed?: () -> bool
     def has_changes_to_save?: () -> bool
     def attribute_was: (String name) -> untyped
-    def attribute_in_database: (Symbol | String name) -> untyped
     def id_previously_changed?: () -> bool
     def previously_new_record?: () -> bool
 
@@ -217,8 +213,6 @@ module ActiveRecord
     # Crystal — the static type needs the method to exist.
     def []: (Symbol name) -> untyped
     def []=: ((Symbol | String) name, untyped value) -> untyped
-    def read_attribute: (Symbol name) -> untyped
-    def write_attribute: (Symbol name, untyped value) -> untyped
     def has_attribute?: (Symbol name) -> bool
     def _note_unloaded: (Hash[String, untyped] _row) -> void
 
@@ -251,7 +245,6 @@ module ActiveRecord
     # would express this directly but the roundhouse RBS parser
     # doesn't support those nodes yet).
     def self.all: () -> Array[Base]
-    def self.default_scoped: () -> Array[Base]
     def self.find: (Integer id) -> Base
     # Per-model `_adapter_*` Level-3 primitives — synthesized by the
     # lowerer per concrete model. Declared here so public `Base.X`

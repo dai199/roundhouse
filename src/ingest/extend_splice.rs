@@ -81,7 +81,24 @@ pub(super) fn splice_sole_extended_modules(app: &mut App) {
 /// `base` (`base.send(:include, InstanceMethods)`), which the model then
 /// includes itself. `None` when the hook does anything else: Ruby runs
 /// it at the `extend`, and what it does would be lost.
+/// A module that defines methods while it runs (`define_singleton_method`,
+/// `class_eval`) leaves its extender open, which `analyze::open_classes`
+/// reads off the `extend` itself.
+fn defines_at_run_time(module: &LibraryClass) -> bool {
+    fn visit(e: &Expr) -> bool {
+        let here = matches!(&*e.node, ExprNode::Send { method, .. }
+            if matches!(method.as_str(), "define_method" | "define_singleton_method" | "class_eval" | "class_exec" | "instance_eval" | "instance_exec" | "module_eval"));
+        let mut found = here;
+        e.node.for_each_child(&mut |c| found |= visit(c));
+        found
+    }
+    module.methods.iter().any(|m| visit(&m.body)) || module.unknown_calls.iter().any(visit)
+}
+
 fn extended_hook_includes(module: &LibraryClass, classes: &[LibraryClass]) -> Option<Vec<ClassId>> {
+    if defines_at_run_time(module) {
+        return None;
+    }
     let Some(hook) = module.methods.iter().find(|m| m.receiver == MethodReceiver::Class && m.name.as_str() == "extended") else {
         return Some(Vec::new());
     };

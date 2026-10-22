@@ -3833,7 +3833,6 @@ impl Analyzer {
         // for the others, and a union `self` is a poly cliff on every
         // send.
         let sole_includer = app.sole_includer_of_modules();
-        let sole_extender = app.sole_extender_of_modules();
 
         // Parameterized mailers: `ProductMailer.with(product: self,
         // subscriber: subscriber).in_stock` makes `params[:product]` a
@@ -3885,9 +3884,8 @@ impl Analyzer {
             if !retype && !mailer_names.contains(&lc_name) {
                 continue;
             }
-            let extender = lc.is_module.then(|| sole_extender.get(&lc.name).cloned()).flatten();
             let self_id = if lc.is_module {
-                extender.clone().or_else(|| sole_includer.get(&lc.name).cloned()).unwrap_or_else(|| lc.name.clone())
+                sole_includer.get(&lc.name).cloned().unwrap_or_else(|| lc.name.clone())
             } else {
                 lc.name.clone()
             };
@@ -3920,11 +3918,7 @@ impl Analyzer {
                     // (`has_markdown(name, strict_loading:
                     // strict_loading_by_default)`) do not ledger
                     // ActiveRecord::Base noise on the default expression.
-                    let mut mctx = self.seed_method_params(&class_ctx, &lc_name, method, true);
-                    if extender.is_some() && method.receiver == MethodReceiver::Instance {
-                        mctx.class_side = true;
-                        mctx.instance_body = false;
-                    }
+                    let mctx = self.seed_method_params(&class_ctx, &lc_name, method, true);
                     for p in &mut method.params {
                         if let Some(default) = &mut p.default {
                             self.body_typer().analyze_expr(default, &mctx);
@@ -4051,11 +4045,7 @@ impl Analyzer {
                     constants: Default::default(), annotate_self_dispatch: false, in_view: false, view_name: None, class_side: false, claimed_macro_template: false, instance_body: false, method_body: false, building_self: false, live_class_locals: Default::default(),
                 };
                 for method in &mut lc.methods {
-                    let mut mctx = self.seed_method_params(&reseeded_ctx, &lc_name, method, true);
-                    if extender.is_some() && method.receiver == MethodReceiver::Instance {
-                        mctx.class_side = true;
-                        mctx.instance_body = false;
-                    }
+                    let mctx = self.seed_method_params(&reseeded_ctx, &lc_name, method, true);
                     self.body_typer().analyze_expr(&mut method.body, &mctx);
                 }
             }
