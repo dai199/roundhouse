@@ -37,9 +37,9 @@ module Arel
 
     def to_s: () -> String
 
-    def in: (ActiveRecord::Relation | SelectManager | Array[untyped] subquery) -> String
+    def in: (ActiveRecord::Relation | SelectManager | Array[Integer | String] subquery) -> String
 
-    def eq: (untyped value) -> Nodes::Predicate
+    def eq: (String | Integer | Float | bool | nil value) -> Nodes::Predicate
 
     def matches: (String pattern, ?String? escape, ?bool _case_sensitive) -> Nodes::Predicate
 

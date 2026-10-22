@@ -1,4 +1,4 @@
-//! `extend M` in a model, where `M` is a module of this program that no
+//! `extend M` in a model, where `M` is a source gem's module that no
 //! class includes and no other class extends: ancestry's expanded
 //! `has_ancestry` does `extend Ancestry::MaterializedPath`. Ruby runs
 //! M's instance methods with the model as `self`, exactly as the
@@ -95,8 +95,15 @@ fn defines_at_run_time(module: &LibraryClass) -> bool {
     module.methods.iter().any(|m| visit(&m.body)) || module.unknown_calls.iter().any(visit)
 }
 
+// Not an app's own module: its body would be checked as the model's for the first time, a change of its own to make
+fn from_source_gem(module: &LibraryClass) -> bool {
+    module.methods.iter().any(|m| {
+        super::sources::path_of(m.name_span.file).is_some_and(|path| path.contains("/.roundhouse/source_gems/") || path.starts_with(".roundhouse/source_gems/"))
+    })
+}
+
 fn extended_hook_includes(module: &LibraryClass, classes: &[LibraryClass]) -> Option<Vec<ClassId>> {
-    if defines_at_run_time(module) {
+    if defines_at_run_time(module) || !from_source_gem(module) {
         return None;
     }
     let Some(hook) = module.methods.iter().find(|m| m.receiver == MethodReceiver::Class && m.name.as_str() == "extended") else {

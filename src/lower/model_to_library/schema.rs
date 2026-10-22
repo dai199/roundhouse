@@ -79,9 +79,10 @@ fn rails_type_name(col: &crate::schema::ColumnType) -> &'static str {
     }
 }
 
-/// `def self.schema_column_types; { id: :integer, title: :string, ... }; end`
+/// `def self.schema_column_types; { id: "integer", title: "string", ... }; end`
 fn push_schema_column_types(methods: &mut Vec<MethodDef>, owner: &ClassId, table: &Table) {
-    let ty = Ty::Hash { key: std::sync::Arc::new(Ty::Sym), value: std::sync::Arc::new(Ty::Sym) };
+    // Not Symbol values: a strict target spells a Symbol as its String type, and a Symbol literal in value position does not convert
+    let ty = Ty::Hash { key: std::sync::Arc::new(Ty::Sym), value: std::sync::Arc::new(Ty::Str) };
     let body = with_ty(
         Expr::new(
             Span::synthetic(),
@@ -89,7 +90,7 @@ fn push_schema_column_types(methods: &mut Vec<MethodDef>, owner: &ClassId, table
                 entries: table
                     .columns
                     .iter()
-                    .map(|c| (lit_sym(c.name.clone()), lit_sym(Symbol::from(rails_type_name(&c.col_type)))))
+                    .map(|c| (lit_sym(c.name.clone()), lit_str(rails_type_name(&c.col_type).to_string())))
                     .collect(),
                 kwargs: false,
             },
