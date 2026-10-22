@@ -528,8 +528,7 @@ module ActiveRecord
     def order_parts!(parts)
       own_lists
       # Rails drops a blank part: ancestry's `reorder(column, order)` passes a nil `order`.
-      terms = []
-      parts.each { |p| terms << order_term(p) unless p.nil? }
+      terms = parts.compact.map { |p| order_term(p) }
       terms.each { |t| @orders << t }
       # `@orders` just changed `to_sql`, so any `cache_key`/`cache_version`
       # memo taken before this call is for the OLD ordering (roundhouse

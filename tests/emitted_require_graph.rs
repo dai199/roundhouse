@@ -324,11 +324,10 @@ end
             continue;
         }
         if target == BuildTarget::Spinel {
-            assert_eq!(gaps.len(), 1, "{gaps:?}");
-            assert!(
-                gaps[0].message.contains("ActiveSupport::ConfigurationFile"),
-                "{gaps:?}"
-            );
+            assert_eq!(gaps.len(), 4, "{gaps:?}");
+            for name in ["ActiveSupport::ConfigurationFile", "Arel::Nodes::Ascending", "Arel::Nodes::Descending", "Arel::Nodes::Predicate"] {
+                assert!(gaps.iter().any(|g| g.message.contains(name)), "{name}: {gaps:?}");
+            }
             continue;
         }
         assert_eq!(gaps.len(), RUBY_FAMILY_RUNTIME_CONSTANTS.len(), "{target:?}: {gaps:?}");

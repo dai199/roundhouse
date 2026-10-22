@@ -5921,7 +5921,8 @@ fn unavailable_class_module_construct(name: &str, target: &str) -> Option<&'stat
     // but recognizes GeneratorError only as a literal rescue name, and
     // its `packages/net` stops short of net/protocol's `HTTPBadResponse`.
     if target == "spinel" {
-        if name == "ActiveSupport::ConfigurationFile" {
+        // The Arel ordering and predicate nodes live on the CRuby overlay (`arel_predicates.rb`).
+        if matches!(name, "ActiveSupport::ConfigurationFile" | "Arel::Nodes::Ascending" | "Arel::Nodes::Descending" | "Arel::Nodes::Predicate") {
             return Some("ruby_family_runtime_constant");
         }
         return if matches!(name, "JSON::GeneratorError" | "Net::HTTPBadResponse") {
