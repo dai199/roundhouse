@@ -918,3 +918,4 @@ fn diagnose_expr_in(expr: &Expr, out: &mut Vec<Diagnostic>, value_used: bool) {
         | ExprNode::SelfRef => {}
     }
 }
+

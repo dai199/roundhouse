@@ -131,6 +131,7 @@ pub mod sum_symbol;
 pub mod values_at_splat;
 pub mod request_index;
 pub mod arel_attribute;
+pub mod relation_class_calls;
 pub mod exclude_predicate;
 pub mod in_predicate;
 pub mod including;

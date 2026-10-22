@@ -102,10 +102,28 @@ module Arel
       def to_s: () -> String
     end
 
+    class Ascending < Node
+      @expr: String
+      @nulls: String
+      def initialize: (Node | Arel::Attribute | String expr) -> void
+      def nulls_first: () -> Ascending
+      def nulls_last: () -> Ascending
+      def to_s: () -> String
+    end
+
+    class Descending < Node
+      @expr: String
+      @nulls: String
+      def initialize: (Node | Arel::Attribute | String expr) -> void
+      def nulls_first: () -> Descending
+      def nulls_last: () -> Descending
+      def to_s: () -> String
+    end
+
     class NamedFunction < Node
       @name: String
       @exprs: Array[String]
-      def initialize: (String | Symbol name, Array[String | Arel::Nodes::Node] exprs) -> void
+      def initialize: (String | Symbol name, Array[String | Arel::Nodes::Node | Arel::Attribute] exprs) -> void
       def to_s: () -> String
     end
   end

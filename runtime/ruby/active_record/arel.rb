@@ -368,6 +368,49 @@ module Arel
       end
     end
 
+    # `Ascending.new(attr).nulls_first` — an ORDER BY term.
+    class Ascending < Node
+      def initialize(expr)
+        @expr = expr.to_s
+        @nulls = ""
+      end
+
+      def nulls_first
+        @nulls = " NULLS FIRST"
+        self
+      end
+
+      def nulls_last
+        @nulls = " NULLS LAST"
+        self
+      end
+
+      def to_s
+        "#{@expr} ASC#{@nulls}"
+      end
+    end
+
+    class Descending < Node
+      def initialize(expr)
+        @expr = expr.to_s
+        @nulls = ""
+      end
+
+      def nulls_first
+        @nulls = " NULLS FIRST"
+        self
+      end
+
+      def nulls_last
+        @nulls = " NULLS LAST"
+        self
+      end
+
+      def to_s
+        "#{@expr} DESC#{@nulls}"
+      end
+    end
+
     class NamedFunction < Node
       def initialize(name, exprs)
         @name = name.to_s
