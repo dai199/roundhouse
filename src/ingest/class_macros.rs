@@ -49,6 +49,12 @@ pub(crate) fn expand_class_macros(app: &mut App, sources: &[SourceFile]) {
         .collect();
     let hooks = hook_macro_table(app);
     let frozen = frozen_readers(app, sources);
+    let known: HashSet<String> = app
+        .library_classes
+        .iter()
+        .map(|c| c.name.0.as_str().to_string())
+        .chain(app.models.iter().map(|m| m.name.0.as_str().to_string()))
+        .collect();
     for model_index in 0..app.models.len() {
         let ancestors = ancestors(app, &parents, &app.models[model_index].name);
         let mut table = class_method_table(app, &ancestors);
@@ -103,7 +109,7 @@ pub(crate) fn expand_class_macros(app: &mut App, sources: &[SourceFile]) {
             if !macros.contains(method) || recv.as_ref().is_some_and(|r| !matches!(&*r.node, ExprNode::SelfRef)) {
                 continue;
             }
-            let mut run = Run { table: &table, constants: &constants, frozen: &frozen, prefix: &prefix, counter, out: Vec::new(), replayed: HashSet::new(), class_attrs: HashMap::new(), unset_cattrs: HashMap::new(), methods: Vec::new(), aliases: Vec::new(), strings: HashMap::new(), owner: model.name.0.clone(), sources };
+            let mut run = Run { table: &table, constants: &constants, frozen: &frozen, known: &known, scope: None, prefix: &prefix, counter, out: Vec::new(), replayed: HashSet::new(), class_attrs: HashMap::new(), unset_cattrs: HashMap::new(), methods: Vec::new(), aliases: Vec::new(), strings: HashMap::new(), owner: model.name.0.clone(), sources };
             let result = if block.is_some() {
                 Err("it is passed a block".to_string())
             } else if redefined {
@@ -412,6 +418,10 @@ struct Run<'a> {
     table: &'a HashMap<Symbol, MethodDef>,
     constants: &'a HashMap<Symbol, Expr>,
     frozen: &'a HashMap<(String, Symbol), Expr>,
+    /// Every class and module this program declares, by full name.
+    known: &'a HashSet<String>,
+    /// The module the running macro is defined in.
+    scope: Option<Symbol>,
     prefix: &'a str,
     counter: usize,
     /// Class-body statements, in the order the macro runs them.
@@ -449,12 +459,18 @@ impl Run<'_> {
             ExprNode::Seq { exprs } => exprs.clone(),
             _ => vec![def.body.clone()],
         };
-        for st in &statements {
-            if self.exec(st, &mut bound, depth)? {
-                break;
-            }
+        let inner = def.enclosing_class.clone().or_else(|| self.scope.clone());
+        let outer = std::mem::replace(&mut self.scope, inner);
+        let ran = statements.iter().try_for_each(|st| match self.exec(st, &mut bound, depth) {
+            Ok(true) => Err(None),
+            Ok(false) => Ok(()),
+            Err(why) => Err(Some(why)),
+        });
+        self.scope = outer;
+        match ran {
+            Err(Some(why)) => Err(why),
+            _ => Ok(()),
         }
-        Ok(())
     }
 
     fn bind(&mut self, def: &MethodDef, args: &[Expr], env: &Env) -> Result<Env, String> {
@@ -553,6 +569,15 @@ impl Run<'_> {
                     "include" | "extend"
                         if block.is_none() && !args.is_empty() && args.iter().all(|a| matches!(&*a.node, ExprNode::Const { .. })) =>
                     {
+                        for arg in args {
+                            let ExprNode::Const { path } = &*arg.node else { continue };
+                            if !self.names_alike(path) {
+                                return Err(format!(
+                                    "its `{}` names a different module from the model than from the macro's own module",
+                                    path.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("::")
+                                ));
+                            }
+                        }
                         self.declare(st.clone());
                         Ok(false)
                     }
@@ -645,6 +670,28 @@ impl Run<'_> {
             }
             _ => Err(format!("a statement is not one it can run: {}", describe(st))),
         }
+    }
+
+    /// The statement is replayed in the model, so its constant must name
+    /// there what it names in the macro's module: a known module with no
+    /// nearer one of that name in the macro's nesting.
+    fn names_alike(&self, path: &[Symbol]) -> bool {
+        let rooted = path.first().is_some_and(|s| s.as_str().is_empty());
+        let written = path.iter().map(|s| s.as_str()).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("::");
+        if !self.known.contains(&written) {
+            return false;
+        }
+        if rooted {
+            return true;
+        }
+        let mut scope = self.scope.as_ref().map(|s| s.as_str().to_string());
+        while let Some(outer) = scope {
+            if self.known.contains(&format!("{outer}::{written}")) {
+                return false;
+            }
+            scope = outer.rsplit_once("::").map(|(o, _)| o.to_string());
+        }
+        true
     }
 
     fn declare(&mut self, statement: Expr) {
