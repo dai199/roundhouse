@@ -402,7 +402,7 @@ module ActiveRecord
     # Rails' `type_for_attribute(name).type`: the column's type name, nil
     # for a name that is no column.
     def self.type_for_attribute(name)
-      ActiveRecord::Type::Value.new(schema_column_types[name.to_sym]&.to_sym)
+      ActiveRecord::Type::Value.new(schema_column_types[name.to_sym])
     end
 
     # Rails' `default_scoped`: `all` with the model's `default_scope`,
