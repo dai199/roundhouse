@@ -277,7 +277,7 @@ fn rewrite_stdlib_const(name: &str) -> Option<&'static str> {
 /// still take the legacy `String + String` path — the hint is the
 /// signal that the lowerer guarantees Builder semantics are safe.
 fn try_string_builder(e: &Expr) -> Option<String> {
-    match e.hint? {
+    match e.hint().as_ref()? {
         IrHint::MutableStringLiteral => None, // emitted as the plain literal
         IrHint::StringBuilderInit => {
             if let ExprNode::Assign {
@@ -1869,6 +1869,11 @@ pub(super) fn emit_literal(l: &Literal) -> String {
         // also interpolates #{...}; literal data must stay literal.
         Literal::Str { value } => format!("{value:?}").replace("#{", "\\#{"),
         Literal::Sym { value } => format!(":{value}"),
+        // Crystal's `m` modifier is documented as "multiline mode (`.`
+        // will match newlines)" — unlike most PCRE-family engines
+        // (and Rust's/Go's RE2), Crystal's own `m` already means
+        // Ruby's `m` (dot-matches-newline), so the flag letter passes
+        // through verbatim correctly, same as `i`.
         Literal::Regex { pattern, flags } => format!(
             "/{}/{flags}",
             crate::emit::shared::regex_literal::escape_regex_delimiters(pattern)

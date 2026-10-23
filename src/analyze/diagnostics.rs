@@ -48,6 +48,48 @@ fn attribute_macro_refusals(app: &App) -> Vec<Diagnostic> {
     out
 }
 
+// One error at each declaration, not one per helper call: the helpers stay typed so their callers still infer
+fn devise_refusals(app: &App) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    if app.gem_lock.as_ref().is_some_and(|lock| lock.is_in_repo("devise") || lock.is_source("devise")) {
+        return out;
+    }
+    // A concern's declaration is spliced into each includer: one refusal per written site, naming every model
+    let mut sites: Vec<(crate::span::Span, Vec<&str>)> = Vec::new();
+    for model in &app.models {
+        for item in &model.body {
+            let crate::dialect::ModelBodyItem::Unknown { expr, .. } = item else { continue };
+            let ExprNode::Send { recv: None, method, .. } = &*expr.node else { continue };
+            if method.as_str() != "devise" {
+                continue;
+            }
+            match sites.iter_mut().find(|(span, _)| *span == expr.span) {
+                Some((_, models)) => models.push(model.name.0.as_str()),
+                None => sites.push((expr.span, vec![model.name.0.as_str()])),
+            }
+        }
+    }
+    for (span, models) in sites {
+        let scopes: Vec<String> = models
+            .iter()
+            .map(|name| crate::naming::snake_case(name.rsplit("::").next().unwrap_or("")))
+            .collect();
+        let named: Vec<String> = models.iter().map(|name| format!("`{name}`")).collect();
+        let helpers: Vec<String> = scopes.iter().map(|scope| format!("`current_{scope}`")).collect();
+        out.push(Diagnostic::unsupported(
+            span,
+            None,
+            "devise",
+            format!(
+                "`devise` on {}: {}, the `_signed_in?` and `authenticate_..!` helpers, `sign_in` and the rest are typed so their callers infer, but no target ships Devise or Warden, so each call reaches no method at run time",
+                named.join(", "),
+                helpers.join(", ")
+            ),
+        ));
+    }
+    out
+}
+
 /// Walk an analyzed `App` collecting every position where typing failed
 /// in a way that matters for downstream typed emission. Does not modify
 /// the IR — purely a read pass.
@@ -81,6 +123,17 @@ pub fn diagnose_with_coverage(app: &App) -> (Vec<Diagnostic>, PreloadCoverage) {
     out.extend(super::graphql::diagnose(app, diagnose_expr));
     out.extend(super::enum_raw_input::diagnose(app));
     out.extend(super::data::diagnose(app));
+    // Constructor refusals must also reach executable class constants and
+    // parameter defaults, which the ordinary method diagnostic policy omits.
+    fn collect_storage_constructors(expr: &Expr, out: &mut Vec<Diagnostic>) {
+        if let Some(DiagnosticKind::Unsupported { construct, detail, .. }) = expr.diagnostic()
+            && construct.as_str() == "ActiveStorage constructor"
+        {
+            out.push(Diagnostic::unsupported(expr.span, None, construct.as_str(), detail.clone()));
+        }
+        expr.node.for_each_child(&mut |child| collect_storage_constructors(child, out));
+    }
+    crate::lower::for_each_hook_body_ref(app, &mut |body| collect_storage_constructors(body, &mut out));
     // Rubydex's unresolved constants emit refusal stubs. Collect those
     // annotations from support methods/defaults/constants as well, so
     // an emitted raise cannot be hidden by the library diagnostic policy.
@@ -94,7 +147,7 @@ pub fn diagnose_with_coverage(app: &App) -> (Vec<Diagnostic>, PreloadCoverage) {
         }
     }
     fn collect_constants(expr: &Expr, out: &mut Vec<Diagnostic>) {
-        if let Some(kind @ DiagnosticKind::IncompatibleBinop { op, lhs_ty, .. }) = &expr.diagnostic {
+        if let Some(kind @ DiagnosticKind::IncompatibleBinop { op, lhs_ty, .. }) = &expr.diagnostic() {
             if nominal_class_operand(lhs_ty) {
             out.push(Diagnostic {
                 span: expr.span,
@@ -104,17 +157,17 @@ pub fn diagnose_with_coverage(app: &App) -> (Vec<Diagnostic>, PreloadCoverage) {
             });
             }
         }
-        if matches!(&expr.diagnostic,
+        if matches!(&expr.diagnostic(),
             Some(DiagnosticKind::Unsupported { .. }))
         {
-            if let Some(DiagnosticKind::Unsupported { target, construct, detail }) = &expr.diagnostic
+            if let Some(DiagnosticKind::Unsupported { target, construct, detail }) = &expr.diagnostic()
                 && construct.as_str() != crate::diagnostic::CONSTRUCTOR_KEYWORD_ARGUMENTS
             {
                 out.push(Diagnostic::unsupported(expr.span, target.clone(), construct.as_str(), detail.clone()));
             }
         }
         // Not dropped with the policy's other misses: the typer stamps it only in place of an Object-extension refusal.
-        if let Some(kind @ DiagnosticKind::SendDispatchFailed { method, recv_ty }) = &expr.diagnostic {
+        if let Some(kind @ DiagnosticKind::SendDispatchFailed { method, recv_ty }) = &expr.diagnostic() {
             out.push(Diagnostic {
                 span: expr.span,
                 severity: Diagnostic::default_severity(kind),
@@ -142,7 +195,7 @@ pub fn diagnose_with_coverage(app: &App) -> (Vec<Diagnostic>, PreloadCoverage) {
     for model in &app.models {
         for item in &model.body {
             if let crate::dialect::ModelBodyItem::Unknown { expr, .. } = item {
-                if let Some(DiagnosticKind::Unsupported { construct, detail, .. }) = &expr.diagnostic {
+                if let Some(DiagnosticKind::Unsupported { construct, detail, .. }) = &expr.diagnostic() {
                     if construct.as_str() == "include" {
                         out.push(Diagnostic::unsupported(expr.span, None, "include", detail.clone()));
                     }
@@ -151,6 +204,7 @@ pub fn diagnose_with_coverage(app: &App) -> (Vec<Diagnostic>, PreloadCoverage) {
         }
     }
     out.extend(attribute_macro_refusals(app));
+    out.extend(devise_refusals(app));
     out.extend(overridden_synthesized_accessors(app));
     out.extend(runtime_defined_surfaces(app));
     // A filter's return value is Rails' to discard (`around_action
@@ -453,7 +507,7 @@ pub fn unknown_receiver_sends(app: &App, classes: &HashMap<ClassId, ClassInfo>) 
                 && is_unknown_ty(expr.ty.as_ref())
                 && !method_registered_on(classes, r.ty.as_ref(), method);
             if (gradual || known_receiver || unknown)
-                && expr.diagnostic.is_none()
+                && expr.diagnostic().is_none()
                 && !expr.span.is_synthetic()
             {
                 out.push(UnknownReceiverSend { span: expr.span, method: method.clone(), gradual, known_receiver });
@@ -516,7 +570,7 @@ fn diagnose_expr_in(expr: &Expr, out: &mut Vec<Diagnostic>, value_used: bool) {
     // These are the IR-carried path: detection happens once at the
     // point of typing, and every reader (including this walker) sees
     // the same set.
-    if let Some(kind) = &expr.diagnostic {
+    if let Some(kind) = &expr.diagnostic() {
         let message = match kind {
             // Types render as a Ruby developer reads them (`Integer?`,
             // `Product`), not as the IR's Debug form — the message is
@@ -579,6 +633,8 @@ fn diagnose_expr_in(expr: &Expr, out: &mut Vec<Diagnostic>, value_used: bool) {
             DiagnosticKind::GraphqlNullableField { .. } => Diagnostic::stub_text(kind),
             // Produced by `ingest::initializer_ledger` as a returned list.
             DiagnosticKind::UnconsumedInitializer { .. } => Diagnostic::stub_text(kind),
+            // Produced by `ingest::model::validations` as a pushed note.
+            DiagnosticKind::IgnoredValidatorOption { .. } => Diagnostic::stub_text(kind),
         };
         if !matches!(
             kind,
@@ -674,7 +730,7 @@ fn diagnose_expr_in(expr: &Expr, out: &mut Vec<Diagnostic>, value_used: bool) {
     // A node the compiler synthesized (an `attr_writer`'s `value`) has no
     // source position: there is nothing for the author to look at or fix.
     if is_unknown_ty(expr.ty.as_ref()) && !expr.span.is_synthetic()
-        && !matches!(expr.diagnostic, Some(DiagnosticKind::Unsupported { .. }))
+        && !matches!(expr.diagnostic(), Some(DiagnosticKind::Unsupported { .. }))
     {
         let report = matches!(
             &*expr.node,

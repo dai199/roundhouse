@@ -26,6 +26,7 @@ use super::util::{
 };
 use super::{IngestError, IngestResult};
 
+use crate::ingest::prism_api::PrismLocation;
 /// Ingest the first class declaration, or return `None` if there is none.
 /// Custom Data blocks require plural ingestion because their lifted methods
 /// belong to additional library classes; reject them rather than lose that IR.
@@ -536,6 +537,14 @@ pub(super) fn library_class_and_struct_base(
         Some(_) => Some(struct_base_id(&owner)),
         None => parent,
     };
+    if parent.is_none() && class.superclass().is_some() {
+        super::prism::push(crate::diagnostic::Diagnostic::unsupported(
+            source_parent_span,
+            None,
+            "superclass",
+            format!("`{}`'s superclass is an expression evaluated when the class loads, not a constant, so the class is emitted without it", owner.0.as_str()),
+        ));
+    }
 
     let DeclBody {
         mut includes,
@@ -1129,7 +1138,7 @@ fn sorbet_struct_members(body: Option<ruby_prism::Node<'_>>, file: &str) -> Vec<
         let Some(name) = args.next().and_then(|n| {
             let symbol = n.as_symbol_node()?;
             Some(Symbol::from(
-                String::from_utf8_lossy(symbol.value_loc()?.as_slice()).as_ref(),
+                String::from_utf8_lossy(symbol.unescaped()).as_ref(),
             ))
         }) else {
             continue;
@@ -1772,8 +1781,21 @@ impl DeclBody {
                 ExprNode::Assign { value, .. } => is_literal_value(value),
                 _ => false,
             });
+        let literal_inits = self.class_initializers.iter().all(|expr| match &*expr.node {
+            ExprNode::Assign { value, .. } => is_literal_value(value),
+            _ => false,
+        });
+        // Not `include`: an ancestor's `@@x` is shared with this body's. An extended module's methods read their own (rolify's `extend Configure` beside `@@resource_types = []`).
+        let mixins_only = self.unknown_calls.iter().all(|call| match &*call.node {
+            ExprNode::Send { recv: None, method, args, block: None, .. } => {
+                method.as_str() == "extend"
+                    && !args.is_empty()
+                    && args.iter().all(|a| matches!(&*a.node, ExprNode::Const { .. }))
+            }
+            _ => false,
+        });
         if has_source_ordered_init
-            && (!self.unknown_calls.is_empty()
+            && ((!self.unknown_calls.is_empty() && !(literal_inits && mixins_only))
                 || !self.includes.is_empty()
                 || (!self.constants.is_empty() && !order_independent))
         {
@@ -1981,6 +2003,31 @@ fn is_class_methods_bridge(def: &ruby_prism::DefNode<'_>) -> bool {
         .is_some_and(|c| constant_id_str(&c.name()) == "ClassMethods"))
 }
 
+/// An `included` hook that does more than the bridge: its
+/// `base.extend ClassMethods` is the carrier splice's job, as in the
+/// complete bridge, and the rest of the hook still runs. AASM writes
+/// `base.extend AASM::ClassMethods` and then registers `base`.
+fn drop_class_methods_extend(def: &ruby_prism::DefNode<'_>, owner: &ClassId, m: &mut MethodDef) {
+    let Some(param) = included_hook_parameter(def) else { return };
+    let owner: Vec<&str> = owner.0.as_str().trim_start_matches("::").split("::").collect();
+    let is_redundant = |stmt: &Expr| {
+        let ExprNode::Send { recv: Some(recv), method, args, block: None, .. } = &*stmt.node else { return false };
+        if method.as_str() != "extend" || !matches!(&*recv.node, ExprNode::Var { name, .. } if name.as_str() == param) {
+            return false;
+        }
+        let [arg] = args.as_slice() else { return false };
+        let ExprNode::Const { path } = &*arg.node else { return false };
+        let path: Vec<&str> = path.iter().map(|s| s.as_str()).filter(|s| !s.is_empty()).collect();
+        let Some((last, scope)) = path.split_last() else { return false };
+        *last == "ClassMethods" && owner.ends_with(scope)
+    };
+    if let ExprNode::Seq { exprs } = &mut *m.body.node {
+        exprs.retain(|stmt| !is_redundant(stmt));
+    } else if is_redundant(&m.body) {
+        m.body = Expr::new(m.body.span, ExprNode::Lit { value: Literal::Nil });
+    }
+}
+
 /// `if enabled; attr_reader :token; end` is a declaration this walk
 /// would lower when it stands alone. Inside a branch it sometimes runs,
 /// which a synthesized method cannot express. Reject it rather than
@@ -2051,6 +2098,31 @@ fn walk_decl_body<'pr>(
     walk_decl_body_with_visibility(body, owner, file, mode, &visibility)
 }
 
+/// A `class << self` an `included do` block may hoist: nothing in it but
+/// `def`s and visibility markers, which the decl walk keeps. Any other
+/// statement (`MAP.each { define_method … }`) the walk would drop.
+fn only_defs(body: Option<ruby_prism::Node<'_>>) -> bool {
+    body.is_none_or(|body| {
+        flatten_statements(body).iter().all(|stmt| {
+            visibility::definition(stmt).is_some()
+                || stmt.as_def_node().is_some()
+                || stmt.as_call_node().is_some_and(|c| visibility::marker(&c))
+        })
+    })
+}
+
+/// Names declared in `class_methods do` / `module ClassMethods` on a concern.
+fn concern_carrier_def_names(body: Option<ruby_prism::Node<'_>>, names: &mut HashSet<String>) {
+    let Some(body) = body else { return };
+    for stmt in flatten_statements(body) {
+        let definition = visibility::definition(&stmt).map(|d| d.as_node());
+        let Some(def) = definition.as_ref().unwrap_or(&stmt).as_def_node() else { continue };
+        if def.receiver().is_none() {
+            names.insert(constant_id_str(&def.name()).to_string());
+        }
+    }
+}
+
 /// Collect a declaration's methods, constants, and supported DSL expansions
 /// using its resolved visibility. Custom Data constants retain only their call
 /// heads here; the factory collector owns lifting and validating their blocks.
@@ -2098,6 +2170,54 @@ fn walk_decl_body_with_visibility<'pr>(
     }
     let has_class_methods = statements.iter().any(|stmt| stmt.as_module_node()
         .is_some_and(|m| module_name_path(&m).as_deref() == Some(&["ClassMethods".to_string()])));
+    // An ActiveSupport::Concern's `included do def x … end end` defines `x`
+    // on every includer. Hoisted into the module's own instance methods it
+    // is found by the same lookup, unless the module also defines `x`
+    // directly: there the includer's copy wins in Ruby and the hoist
+    // would flip it, so a colliding name keeps its nested-def refusal.
+    // A model also gets them as its own methods (the concern splice).
+    // ponytail: a non-model includer's `def x` written ABOVE its `include`
+    // loses to the block in Ruby but wins over the hoisted copy; unchecked.
+    let concern_direct_defs: Option<HashSet<String>> = (mode == DeclBodyMode::Instance
+        && statements.iter().any(|stmt| {
+            stmt.as_call_node().is_some_and(|call| {
+                call.receiver().is_none()
+                    && constant_id_str(&call.name()) == "extend"
+                    && call.arguments().is_some_and(|args| {
+                        args.arguments().iter().any(|arg| {
+                            constant_path_of(&arg).is_some_and(|path| path.join("::") == "ActiveSupport::Concern")
+                        })
+                    })
+            })
+        }))
+    .then(|| {
+        statements
+            .iter()
+            .filter_map(|stmt| {
+                let definition = visibility::definition(stmt).map(|d| d.as_node());
+                let def = definition.as_ref().unwrap_or(stmt).as_def_node()?;
+                def.receiver().is_none().then(|| constant_id_str(&def.name()).to_string())
+            })
+            .collect()
+    });
+    let concern_class_defs: Option<HashSet<String>> = concern_direct_defs.as_ref().map(|_| {
+        let mut names = HashSet::new();
+        for stmt in &statements {
+            if let Some(m) = stmt.as_module_node()
+                && module_name_path(&m).as_deref() == Some(&["ClassMethods".to_string()])
+            {
+                concern_carrier_def_names(m.body(), &mut names);
+            }
+            if let Some(call) = stmt.as_call_node()
+                && call.receiver().is_none()
+                && constant_id_str(&call.name()) == "class_methods"
+                && let Some(block) = call.block().and_then(|b| b.as_block_node())
+            {
+                concern_carrier_def_names(block.body(), &mut names);
+            }
+        }
+        names
+    });
     for statement in statements {
         // An `if` / `unless` around a `def`, a visibility marker, or an
         // accessor this walk would otherwise lower is not a statement it
@@ -2201,12 +2321,11 @@ fn walk_decl_body_with_visibility<'pr>(
         // has been walked. Non-nil initializers remain outside this slice.
         if stmt.as_class_variable_write_node().is_some() {
             let initializer = ingest_expr(&stmt, file)?;
-            if !matches!(&*initializer.node, ExprNode::Assign { value, .. }
-                if matches!(&*value.node, ExprNode::Lit { value: Literal::Nil }))
-            {
+            // Not any value: one that reads other state would observe the order the emitted body runs in
+            if !matches!(&*initializer.node, ExprNode::Assign { value, .. } if is_literal_value(value)) {
                 return Err(IngestError::Unsupported {
                     file: file.into(),
-                    message: "class-variable initializer with non-nil value".into(),
+                    message: "class-variable initializer with a non-literal value".into(),
                 });
             }
             out.class_initializers.push(initializer);
@@ -2226,6 +2345,9 @@ fn walk_decl_body_with_visibility<'pr>(
                 continue;
             }
             let mut m = ingest_library_method(&def, owner, file)?;
+            if has_class_methods {
+                drop_class_methods_extend(&def, owner, &mut m);
+            }
             visibility.apply(&statement, &mut m);
             if module_function_active && m.receiver == MethodReceiver::Instance {
                 // The retained singleton copy is public even if the original
@@ -2334,8 +2456,7 @@ fn walk_decl_body_with_visibility<'pr>(
             let receiver = if mode.is_class_side() { MethodReceiver::Class } else { MethodReceiver::Instance };
             if let Some((to, from)) = to.zip(from) {
                 if let Some(source) = out.methods.iter().rposition(|method| method.name.as_str() == from && method.receiver == receiver) {
-                    let mut copy = out.methods[source].clone();
-                    copy.name = Symbol::from(to.as_str());
+                    let mut copy = copy_aliased_method(&out.methods[source], to.as_str());
                     copy.name_span = Span {
                         file: super::sources::file_id(file),
                         start: alias.location().start_offset() as u32,
@@ -2369,6 +2490,80 @@ fn walk_decl_body_with_visibility<'pr>(
                         out.extend(walk_decl_body_with_visibility(block.body(), owner, file, DeclBodyMode::ClassMethods, visibility)?);
                         continue;
                     }
+                }
+                if kw == "included"
+                    && call.arguments().is_none()
+                    && let Some(direct_defs) = &concern_direct_defs
+                    && let Some(block) = call.block().and_then(|blk| blk.as_block_node())
+                    && block.parameters().is_none()
+                    && let Some(block_body) = block.body()
+                    && let inner_stmts = flatten_statements(block_body)
+                    // A module the block includes sits ahead of this one, so a
+                    // hoisted def would lose to it where the includer's own wins.
+                    && !inner_stmts.iter().any(|inner| {
+                        inner.as_call_node().is_some_and(|c| {
+                            c.receiver().is_none() && matches!(constant_id_str(&c.name()), "include" | "prepend")
+                        })
+                    })
+                {
+                    let mut hoisted: Vec<(u32, u32)> = Vec::new();
+                    for inner in inner_stmts {
+                        // `class << self` here opens the includer's singleton:
+                        // class methods, as from `class_methods do`.
+                        if let Some(sc) = inner.as_singleton_class_node()
+                            && sc.expression().as_self_node().is_some()
+                            && only_defs(sc.body())
+                            && concern_class_defs.as_ref().is_none_or(|carrier| {
+                                let Some(body) = sc.body() else { return true };
+                                !flatten_statements(body).iter().any(|stmt| {
+                                    let definition = visibility::definition(stmt).map(|d| d.as_node());
+                                    let Some(def) = definition.as_ref().unwrap_or(stmt).as_def_node() else {
+                                        return false;
+                                    };
+                                    def.receiver().is_none()
+                                        && carrier.contains(constant_id_str(&def.name()))
+                                })
+                            })
+                        {
+                            out.extend(walk_decl_body_with_visibility(sc.body(), owner, file, DeclBodyMode::SingletonClass, visibility)?);
+                            hoisted.push((inner.location().start_offset() as u32, inner.location().end_offset() as u32));
+                            continue;
+                        }
+                        let definition = visibility::definition(&inner).map(|d| d.as_node());
+                        let Some(def) = definition.as_ref().unwrap_or(&inner).as_def_node() else { continue };
+                        let class_side = def.receiver().is_some_and(|r| r.as_self_node().is_some());
+                        let name = constant_id_str(&def.name());
+                        if (def.receiver().is_some() && !class_side)
+                            || (!class_side && direct_defs.contains(name))
+                            || (class_side && concern_class_defs.as_ref().is_some_and(|c| c.contains(name)))
+                        {
+                            continue;
+                        }
+                        let mut m = ingest_library_method(&def, owner, file)?;
+                        visibility.apply(&inner, &mut m);
+                        if class_side {
+                            m.receiver = MethodReceiver::Class;
+                        }
+                        out.methods.push(m);
+                        hoisted.push((inner.location().start_offset() as u32, inner.location().end_offset() as u32));
+                    }
+                    // The rest of the block is kept as before; only the
+                    // hoisted statements leave it.
+                    if let Ok(mut e) = ingest_expr(&stmt, file) {
+                        if let ExprNode::Send { block: Some(blk), .. } = &mut *e.node
+                            && let ExprNode::Lambda { body, .. } = &mut *blk.node
+                        {
+                            // By range: `class << self` ingests as its body's span.
+                            let inside = |x: &Expr| hoisted.iter().any(|&(s, e)| s <= x.span.start && x.span.end <= e);
+                            if let ExprNode::Seq { exprs } = &mut *body.node {
+                                exprs.retain(|x| !inside(x));
+                            } else if inside(body) {
+                                *body = Expr::new(body.span, ExprNode::Lit { value: Literal::Nil });
+                            }
+                        }
+                        out.unknown_calls.push(e);
+                    }
+                    continue;
                 }
                 match kw {
                     "include" => {
@@ -2563,8 +2758,7 @@ fn walk_decl_body_with_visibility<'pr>(
                     {
                         let (to, source) =
                             alias_source(&call, &out.methods, mode.is_class_side()).unwrap();
-                        let mut copy = out.methods[source].clone();
-                        copy.name = Symbol::from(to.as_str());
+                        let mut copy = copy_aliased_method(&out.methods[source], to.as_str());
                         copy.name_span = Span {
                             file: super::sources::file_id(file),
                             start: call.location().start_offset() as u32,
@@ -2837,6 +3031,17 @@ pub(super) fn alias_source(
     let source =
         methods.iter().rposition(|m| m.name.as_str() == from.as_str() && m.receiver == receiver)?;
     Some((to.clone(), source))
+}
+
+/// The method an `alias` or `alias_method` copies: `source` under
+/// `new_name`. Callers keep their own rules for which definition is
+/// eligible, and for the alias span and visibility. A body that calls
+/// `super` is still copied; model ingest refuses that case first,
+/// because a renamed copy would reach its own super method.
+pub(crate) fn copy_aliased_method(source: &MethodDef, new_name: &str) -> MethodDef {
+    let mut copy = source.clone();
+    copy.name = Symbol::from(new_name);
+    copy
 }
 
 /// Synthesize `def <name>; @<name>; end` (instance receiver) or
@@ -3258,7 +3463,7 @@ pub(super) fn ingest_library_method_with_keywords(
     // the runtime_src split (see runtime_src::method_params).
     let block_param = def
         .parameters()
-        .and_then(|pn| pn.block())
+        .and_then(|pn| super::prism_api::block_parameter(&pn))
         .map(|block| {
             let name = block
                 .name()
@@ -3772,6 +3977,26 @@ pub fn ingest_concern_class_method_spans(
                 {
                     if let Some(block) = call.block().and_then(|b| b.as_block_node()) {
                         defs_in(block.body(), file, &mut spans);
+                    }
+                }
+                // `included do class << self … end; def self.x … end end`:
+                // the includer's singleton, hoisted by the decl walk.
+                if call.receiver().is_none()
+                    && call.arguments().is_none()
+                    && constant_id_str(&call.name()) == "included"
+                    && let Some(body) = call.block().and_then(|b| b.as_block_node()).and_then(|b| b.body())
+                {
+                    for inner in flatten_statements(body) {
+                        if let Some(sc) = inner.as_singleton_class_node()
+                            && sc.expression().as_self_node().is_some()
+                            && only_defs(sc.body())
+                        {
+                            defs_in(sc.body(), file, &mut spans);
+                        } else if let Some(def) = visibility::definition(&inner)
+                            && def.receiver().is_some_and(|r| r.as_self_node().is_some())
+                        {
+                            spans.push(super::util::def_name_span(&def, file));
+                        }
                     }
                 }
             }
@@ -4392,19 +4617,26 @@ fn walk_dsl_stmts<'pr>(body: ruby_prism::Node<'pr>, out: &mut Vec<ruby_prism::No
 pub(super) fn included_has_accessor(body: ruby_prism::Node<'_>, owner: &ClassId, file: &str) -> bool {
     let mut stmts = Vec::new();
     walk_dsl_stmts(body, &mut stmts);
-    super::survey::without_recording(|| {
-        stmts.iter().any(|stmt| {
-            super::model::ingest_model_body_items(stmt, owner, file, Vec::new(), None)
-                .is_ok_and(|items| items.iter().any(super::concern_accessors::is_candidate))
+    // A probe: what it builds is discarded, so is what it reports. Its
+    // gaps would otherwise be recorded (and printed) a second time per
+    // includer, with no constants to fold, for statements the concern
+    // walk lowers.
+    let (has, _probe_diags) = super::prism::scope(|| {
+        super::survey::without_recording(|| {
+            stmts.iter().any(|stmt| {
+                super::model::ingest_model_body_items(stmt, owner, file, Vec::new(), None, &super::model::ClassConsts::default())
+                    .is_ok_and(|items| items.iter().any(super::concern_accessors::is_candidate))
+            })
         })
-    })
+    });
+    has
 }
 
 /// Instance methods a concern's `included do` block (re)defines on every
 /// includer: `def x`, `alias_method :x, ...`, `define_method :x`,
 /// `attr_reader/attr_accessor :x`. The block's other statements become
-/// `concern_model_items`; its `def`s are dropped there (they stay with the
-/// module), so the analyzer learns which names they replace from here.
+/// `concern_model_items` (its `def`s too, and the decl walk hoists them onto
+/// the module); the analyzer learns which names they replace from here.
 pub(in crate::ingest) fn ingest_concern_included_redefs(source: &[u8], file: &str) -> Vec<(ClassId, Symbol)> {
     let _ = file;
     let result = super::prism::parse_silent(source);
@@ -4496,6 +4728,13 @@ pub(in crate::ingest) fn ingest_concern_model_items_with_constants(
         };
 
         let Some(body) = module.body() else { continue };
+        // `included do` runs in the includer, but its constants resolve
+        // lexically, from this module (`DESCRIPTION_LIMIT = 150` in the
+        // concern wins over an includer's own, and an includer-only one
+        // is a NameError there): the module body's constants, under the
+        // class-body folding rules.
+        let concern_consts = super::model::ClassConsts::collect(&flatten_statements(module.body().unwrap()), file);
+        let block_visibility = super::visibility::Visibility::resolve(Some(&body), file, Some(&id)).ok();
         let mut items: Vec<ModelBodyItem> = Vec::new();
         let mut enums: Vec<ConcernEnumDecl> = Vec::new();
         let is_concern = flatten_statements(module.body().unwrap()).iter().any(|stmt| {
@@ -4533,7 +4772,7 @@ pub(in crate::ingest) fn ingest_concern_model_items_with_constants(
                 // today's handling as a whole.
                 if let Some((guard, stmts)) = includer_guarded_stmts(&inner, file) {
                     let parsed: Option<Vec<ModelBodyItem>> = stmts.iter().try_fold(Vec::new(), |mut acc, stmt| {
-                        let parsed = super::model::ingest_model_body_items(stmt, &id, file, Vec::new(), None).ok()?;
+                        let parsed = super::model::ingest_model_body_items(stmt, &id, file, Vec::new(), None, &concern_consts).ok()?;
                         let claimed = !parsed.is_empty()
                             && parsed.iter().all(|item| matches!(item,
                                 ModelBodyItem::Association { .. }
@@ -4565,7 +4804,7 @@ pub(in crate::ingest) fn ingest_concern_model_items_with_constants(
                         &call,
                         file,
                         &[],
-                        &super::model::ClassConsts::default(),
+                        &concern_consts,
                         &resolve_constant,
                     ) {
                         Ok(Some(super::model::ClassBodyExpansion::DelegatedType(expanded))) => {
@@ -4599,7 +4838,14 @@ pub(in crate::ingest) fn ingest_concern_model_items_with_constants(
                 let is_direct = direct.iter().any(|stmt| {
                     stmt.location().start_offset() == inner.location().start_offset()
                 });
-                match super::model::ingest_model_body_items(&inner, &id, file, Vec::new(), None) {
+                // Its methods are the module's class methods (the decl walk).
+                if is_concern
+                    && is_direct
+                    && inner.as_singleton_class_node().is_some_and(|sc| sc.expression().as_self_node().is_some() && only_defs(sc.body()))
+                {
+                    continue;
+                }
+                match super::model::ingest_model_body_items(&inner, &id, file, Vec::new(), None, &concern_consts) {
                     Ok(parsed) => {
                         for mut item in parsed {
                             match item {
@@ -4620,7 +4866,7 @@ pub(in crate::ingest) fn ingest_concern_model_items_with_constants(
                                 ModelBodyItem::Unknown { .. } => {
                                     if is_candidate(&item) {
                                         if !is_supported(&item) {
-                                            decline(&mut item, "unsupported accessor shape: only direct, nonempty, literal-Symbol attr_accessor is modeled");
+                                            decline(&mut item, "unsupported accessor shape: only direct, nonempty, literal-Symbol attr_accessor, attr_reader or attr_writer is modeled");
                                         } else if !is_direct {
                                             decline(&mut item, "inside with_options is not modeled");
                                         }
@@ -4641,6 +4887,23 @@ pub(in crate::ingest) fn ingest_concern_model_items_with_constants(
                                     } else {
                                         unclaimed = true;
                                     }
+                                }
+                                // A direct `def` is `class_eval`ed on each
+                                // includer: carried as the model's own
+                                // method, it wins over the column reader and
+                                // its `super` reaches the column, as in Ruby.
+                                ModelBodyItem::Method { ref mut method, .. }
+                                    if is_concern
+                                        && is_direct
+                                        && method.receiver == crate::dialect::MethodReceiver::Instance =>
+                                {
+                                    if let Some(visibility) = &block_visibility {
+                                        visibility.apply(&inner, method);
+                                    }
+                                    items.push(item);
+                                    // Still unclaimed for a carried accessor:
+                                    // the def may redefine it.
+                                    unclaimed = true;
                                 }
                                 _ => unclaimed = true,
                             }

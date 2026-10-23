@@ -33,6 +33,9 @@
 require_relative "boot"
 
 module Main
+  # The framework class used by the nominal ParseError fallback.
+  FrameworkParseError = ActionDispatch::Http::Parameters::ParseError
+
   # Dispatch one request to a response descriptor — the single source
   # of routing / controller / flash / redirect logic. Returns the
   # 10-tuple `[status, body, content_type, location, set_cookies,
@@ -102,6 +105,13 @@ module Main
   def self.dispatch_core_inner(env, stdin)
     ActionView::ViewHelpers.reset_slots!
     Broadcasts.reset_log!
+    # config.assume_ssl, same as the spinel dispatcher: the Rack env is
+    # what `request.ssl?` and the Secure cookie flag both read.
+    if AppEnvironment.serving_assume_ssl?
+      env["HTTPS"] = "on"
+      env["HTTP_X_FORWARDED_PROTO"] = "https"
+      env["rack.url_scheme"] = "https"
+    end
 
     request = CgiIo.parse_request(env, stdin)
     # Browser forms can only GET/POST; a hidden `_method` field carries
@@ -290,9 +300,15 @@ module Main
       # param; an html one may still name `?format=`.
       format_param = request_format == :html ? merged["format"].to_s : request_format.to_s
       return not_found_response(format_param, request_path, request, env)
-    rescue ActionController::ParameterMissing, ActionController::BadRequest
-      # `params.expect` / `params.require` refused the request and the app
-      # did not rescue it: Rails' rescue_responses answer :bad_request.
+    rescue ActionController::ParameterMissing, ActionController::BadRequest,
+           ActionDispatch::Http::Parameters::ParseError => error
+      # The app's handlers have already run. Rails' rescue_responses map
+      # an unhandled ParseError to :bad_request by its exact class name;
+      # an application subclass has no default mapping.
+      # Bind the built-ins so application instance/class overrides cannot
+      # turn a subclass into the framework's exact exception class.
+      raise if Kernel.instance_method(:is_a?).bind_call(error, FrameworkParseError) &&
+               !Kernel.instance_method(:instance_of?).bind_call(error, FrameworkParseError)
       return [400, "<h1>400 Bad Request</h1>", "text/html; charset=utf-8", nil, {}, {}, {}, {}, {}]
     rescue ActiveRecord::RecordInvalid, ActiveRecord::RecordNotSaved, ActionController::InvalidAuthenticityToken
       # Not a 500: Rails' rescue_responses answer these with 422.
@@ -367,6 +383,7 @@ module Main
     # Cache-Control, and a 304 for a matching If-None-Match, on the
     # controller's status, body and headers before they are read below.
     controller.commit_conditional_get!(env["REQUEST_METHOD"].to_s, env["HTTP_IF_NONE_MATCH"].to_s)
+    controller.commit_default_headers!
     # Headers the action set beyond Content-Type/Location — a
     # `Content-Disposition` on a download, the Cache-Control a blob
     # route asks for — ride as the tuple's sixth element.
@@ -379,7 +396,7 @@ module Main
     end
     if is_redirect
       [controller.status,
-       %(<a href="#{controller.location}">Redirecting</a>),
+       %(<a href="#{ActionView::ViewHelpers.html_escape(controller.location.to_s)}">Redirecting</a>),
        "text/html; charset=utf-8", controller.location, out_cookies, extra_headers, secure_cookies, samesite_cookies, httponly_cookies, expires_cookies]
     else
       # The controller body IS the full page: the Ruby emit path's
