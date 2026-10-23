@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, HashSet};
 use crate::dialect::Action;
 use crate::expr::{ArrayStyle, Expr, ExprNode, LValue, Literal};
 use crate::ident::{Symbol, VarId};
+use crate::lower::scope_chain::{AssocBuildTarget, AssocRegistry};
 use crate::span::Span;
 use crate::ty::Ty;
 
@@ -101,7 +102,7 @@ pub(super) fn partial_view_call_with_record(
     for n in &contract.closure {
         view_args.push(lookup(n).unwrap_or_else(|| ivar(n.as_str(), span)));
     }
-    view_args.extend(contract.extras_args(lookup, || nil_expr(span), span));
+    view_args.extend(contract.extras_args(lookup, |_| None, None, || nil_expr(span), span));
     Some(Expr::new(
         span,
         ExprNode::Send {
@@ -391,6 +392,9 @@ pub(super) fn rewrite_render_to_views(
                             "format" => {}
                             _ => rest.push((k.clone(), v.clone())),
                         }
+                    }
+                    if body.as_ref().is_some_and(|(_, ct)| *ct == Some("application/json")) {
+                        refuse_serializer_options(&mut rest);
                     }
                     if name.is_none() {
                         // Non-template render: `render html: X, layout:
@@ -941,6 +945,44 @@ fn html_escape_call(value: &Expr) -> Expr {
     )
 }
 
+/// active_model_serializers' `render json:` options. The runtime
+/// `render(body, status:, content_type:, location:)` takes none of
+/// them, so passed through they raised `ArgumentError (unknown
+/// keywords)` on the first request, and the body would have been the
+/// value's own `to_json` rather than the serializer's. Rendering through
+/// the serializer is not modelled: each such render is an error residue
+/// (it keeps the route with Rails), and its keywords are not emitted.
+const SERIALIZER_OPTIONS: [&str; 4] = ["serializer", "each_serializer", "adapter", "root"];
+
+///
+/// The residue sits on the option's key, inside the action alone: the
+/// render call's own start is shared by the controller's synthesized
+/// methods (`controller_name`, …) every route reaches, so anchored there
+/// it would keep the controller's other actions with Rails too.
+fn refuse_serializer_options(rest: &mut Vec<(Expr, Expr)>) {
+    let key_of = |k: &Expr| match &*k.node {
+        ExprNode::Lit { value: Literal::Sym { value } } => SERIALIZER_OPTIONS.iter().position(|o| *o == value.as_str()),
+        _ => None,
+    };
+    let Some((first, span)) = rest.iter().filter_map(|(k, _)| key_of(k).map(|i| (i, k.span))).min_by_key(|(i, _)| *i) else {
+        return;
+    };
+    rest.retain(|(k, _)| key_of(k).is_none());
+    let option = SERIALIZER_OPTIONS[first];
+    let mut d = crate::lower::residue_diagnostic(
+        "controller_render",
+        "render_json_serializer",
+        span,
+        "serializer_render_not_modelled",
+        format!(
+            "`render json:` with `{option}:` is not lowered: rendering through an active_model_serializers \
+             serializer is not modelled, and the runtime `render` takes no serializer options"
+        ),
+    );
+    d.severity = crate::diagnostic::Severity::Error;
+    crate::emit::diagnostics::push(d);
+}
+
 /// `json_render_encode`, with a value that may be a String at run time sent as it is (`JsonRender.body`).
 fn json_render_body(value: &Expr) -> Expr {
     let mut encoded = json_render_encode(value);
@@ -1120,19 +1162,38 @@ fn merge_or_append_kwarg(args: &mut Vec<Expr>, key: &str, value: &str, span: Spa
 // to children of the parent. Spinel doesn't have association proxies;
 // the parent linkage has to be made explicit at the call site.
 //
-//   @x = @parent.<assoc>.build(<args>)
+//   @x = @parent.<assoc>.build(<args>)   (or `.new(<args>)`)
 //   ─────────────────────────────────────────────────────────────────
 //   attrs = <args>.to_h
-//   attrs[:<parent>_id] = @parent.id
-//   @x = <Singular>.new(attrs)
+//   attrs[:<foreign_key>] = @parent.id
+//   @x = <Target>.new(attrs)
 //
 //   @x = @parent.<assoc>.find(<args>)
 //   ─────────────────────────────────────────────────────────────────
-//   @x = <Singular>.find(<args>)
-//   if @x.<parent>_id != @parent.id
+//   @x = <Target>.find(<args>)
+//   if @x.<foreign_key> != @parent.id
 //     head(:not_found)
 //     return
 //   end
+//
+// <Target> and <foreign_key> are the class and foreign key of the
+// declaration the parent's model reads (its own, else its nearest
+// superclass's; the last one when a model declares the name twice, as
+// with a concern's `has_many` and the model's own after the `include`).
+// A parent of no known model reads the declaration of the model its name
+// gives, when that model has the association, else the one every
+// declarer agrees on. An association no model declares keeps the
+// name-derived form (`<Singular>`, `<parent>_id`). One declared in a way
+// this call cannot reproduce (a scope that changes what it builds or
+// finds), one whose extension defines this call (`find`, `build`, …), or
+// one the parent's model does not declare (or, for a parent typed as a
+// union of models, does not declare alike) is left as written.
+//
+// A `.new` here is one `association_new` left as written. Where the
+// extension defines `build`, the proxy's `new` is Rails' own `build`
+// still, so it expands as one; an extension defining `new` declines it,
+// and a read not analyzed as the target's collection is left alone, as
+// `association_new` leaves it.
 //
 // One Assign expands to a Seq of multiple Exprs — the outer Seq the
 // emitter walks for line-per-statement output flattens implicitly.
@@ -1142,16 +1203,25 @@ pub(super) fn rewrite_assoc_through_parent_typed(
     expr: &Expr,
     privs: &[Action],
     params_specs: &ParamsSpecs,
+    assocs: &AssocRegistry,
 ) -> Expr {
     let helper_specs = super::params::helper_spec_map(privs, params_specs);
+    let sources = super::params_sources::ParamsSources::new(
+        expr,
+        helper_specs.iter().map(|(name, spec)| (name.clone(), spec.class_id.clone())).collect(),
+        params_specs,
+    );
+    let mut names = HashSet::new();
+    collect_build_local_names(expr, &mut names);
+    let names = std::cell::RefCell::new(names);
+    let mut expression_assigns = HashSet::new();
+    collect_expression_assigns(expr, true, &mut expression_assigns);
     map_expr(expr, &|e| {
         let ExprNode::Assign { target, value } = &*e.node else {
             return None;
         };
-        // Build/Find expansions synthesize `@<lhs>`-shaped follow-on
-        // statements, so they require an ivar LHS; the single-statement
-        // FindBy rewrite works for local assigns too (`comment =
-        // @article.comments.find_by(id: x)`).
+        // Find/Create retain their instance-variable destination contract.
+        // Declared builds and the single-statement FindBy also admit locals.
         let lhs = match target {
             LValue::Ivar { name } => Some(name),
             _ => None,
@@ -1167,7 +1237,7 @@ pub(super) fn rewrite_assoc_through_parent_typed(
             return None;
         };
         let kind = match outer_method.as_str() {
-            "build" => AssocKind::Build,
+            "build" | "new" => AssocKind::Build,
             // Rails' `create` on an association is `build` + save, over
             // an attribute HASH. A typed params object handed to the
             // runtime's `create` would be indexed like a Hash and
@@ -1180,7 +1250,8 @@ pub(super) fn rewrite_assoc_through_parent_typed(
             "find_by" => AssocKind::FindBy,
             _ => return None,
         };
-        if lhs.is_none() && !matches!(kind, AssocKind::FindBy) {
+        let local_build = matches!(target, LValue::Var { .. }) && matches!(kind, AssocKind::Build);
+        if lhs.is_none() && !local_build && !matches!(kind, AssocKind::FindBy) {
             return None;
         }
         // `find` needs its id arg; `build` may be bare (`@story.comments.
@@ -1207,32 +1278,93 @@ pub(super) fn rewrite_assoc_through_parent_typed(
         let ExprNode::Ivar { name: parent_name } = &*inner_recv.node else {
             return None;
         };
-        // The foreign key below comes from the ivar's name and the
-        // parent's value from `.id`; an association keyed on another
-        // owner column (`primary_key:`) needs the declaration instead.
-        if params_specs.is_keyed_assoc(assoc_method) {
+        // The class and foreign key come from the declaration
+        // (`class_name:`, `foreign_key:`) the parent's analyzed class
+        // (or, untyped, its name) reads, the parent's value from `.id`.
+        // A declaration that expansion cannot reproduce (`primary_key:`,
+        // `through:`, `as:`, a scope that changes what this call builds
+        // or finds), an extension method by this call's name, or a
+        // parent model without the association (any of a union's) is
+        // declined, and the typed association seed handles or refuses
+        // the call instead.
+        let (model_class, fk) = match assocs.build_target(inner_recv, assoc_method, outer_method) {
+            AssocBuildTarget::Declared { target, foreign_key } => {
+                (target.0.as_str().to_string(), foreign_key.as_str().to_string())
+            }
+            AssocBuildTarget::Declined => return None,
+            AssocBuildTarget::Undeclared if local_build || outer_method.as_str() == "new" => return None,
+            AssocBuildTarget::Undeclared => (
+                crate::naming::singularize_camelize(assoc_method.as_str()),
+                format!("{}_id", parent_name.as_str()),
+            ),
+        };
+        // `association_new`'s guard, for the `.new` it left: a method
+        // named like an association may return an unrelated class.
+        if outer_method.as_str() == "new" && !reads_collection_of(outer_recv, &model_class) {
             return None;
         }
-        let model_class = crate::naming::singularize_camelize(assoc_method.as_str());
-        let fk = format!("{}_id", parent_name.as_str());
         Some(match kind {
             AssocKind::Build => {
-                let lhs = lhs.expect("checked above");
-                if outer_args.is_empty() {
-                    return Some(expand_build_bare(&model_class, &fk, parent_name, lhs, e.span));
+                let spec = outer_args.first().and_then(|arg| {
+                    let class = sources.class(arg, params_specs)?;
+                    params_specs.iter().find(|spec| spec.class_id == class)
+                });
+                if let Some(spec) = spec {
+                    if !has_typed_factory(&model_class, spec) {
+                        return None;
+                    }
+                } else if outer_args.first().is_some_and(|arg| !sources.is_hash(arg)) {
+                    return None;
                 }
-                if let Some(spec) = match_params_helper(&outer_args[0], &helper_specs, params_specs) {
-                    return Some(expand_build_typed(
+                // Resolve the owner before evaluating attributes, which may
+                // reassign the parent ivar. Generated names cannot capture
+                // a written local or block parameter in this action.
+                let mut names = names.borrow_mut();
+                let owner_name = fresh_build_local("owner", &mut names);
+                let owner = Expr::new(e.span, ExprNode::Var { id: VarId(0), name: owner_name.clone() });
+                let capture = Expr::new(e.span, ExprNode::Assign {
+                    target: LValue::Var { id: VarId(0), name: owner_name },
+                    value: inner_recv.clone(),
+                });
+                let build_target = if spec.is_some() || outer_args.is_empty() {
+                    LValue::Var { id: VarId(0), name: fresh_build_local("record", &mut names) }
+                } else {
+                    target.clone()
+                };
+                let built = if outer_args.is_empty() {
+                    expand_build_bare(&model_class, &fk, &owner, &build_target, e.span)
+                } else if let Some(spec) = spec {
+                    expand_build_typed(
                         &model_class,
                         &fk,
-                        parent_name,
-                        lhs,
+                        &owner,
+                        &build_target,
                         &outer_args[0],
                         super::params::model_from_params_name(spec),
                         e.span,
-                    ));
+                    )
+                } else {
+                    expand_build(&model_class, &fk, &owner, target, &outer_args[0], e.span)
+                };
+                let ExprNode::Seq { mut exprs } = *built.node else { unreachable!("build sequence") };
+                if spec.is_some() || outer_args.is_empty() {
+                    // The source destination is assigned only after the
+                    // constructor and FK setter have both completed.
+                    let value = exprs.pop().expect("build result");
+                    exprs.push(Expr::new(e.span, ExprNode::Assign { target: target.clone(), value }));
                 }
-                expand_build(&model_class, &fk, parent_name, lhs, &outer_args[0], e.span)
+                let body = Expr::new(e.span, ExprNode::Seq {
+                    exprs: std::iter::once(capture).chain(exprs).collect(),
+                });
+                if !expression_assigns.contains(&e.span) {
+                    return Some(body);
+                }
+                // A local assignment can itself be a call argument or a
+                // short-circuit operand. Keep its statements at that exact
+                // evaluation site and return the assigned record.
+                Expr::new(e.span, ExprNode::BeginRescue {
+                    body, rescues: vec![], else_branch: None, ensure: None, implicit: false,
+                })
             }
             // Only the TYPED arm is recognized. An attribute-Hash
             // `create` already works through the runtime, and turning it
@@ -1240,6 +1372,9 @@ pub(super) fn rewrite_assoc_through_parent_typed(
             AssocKind::Create { bang } => {
                 let lhs = lhs.expect("checked above");
                 let spec = match_params_helper(&outer_args[0], &helper_specs, params_specs)?;
+                if !has_typed_factory(&model_class, spec) {
+                    return None;
+                }
                 expand_create_typed(
                     &model_class,
                     &fk,
@@ -1290,7 +1425,7 @@ pub(super) fn rewrite_assoc_through_parent_typed(
                         value: Expr::new(
                             e.span,
                             ExprNode::Send {
-                                recv: Some(const_path(&[&model_class], e.span)),
+                                recv: Some(model_const(&model_class, e.span)),
                                 method: Symbol::from("find_by"),
                                 args: vec![Expr::new(
                                     e.span,
@@ -1318,9 +1453,8 @@ pub(super) fn rewrite_assoc_through_parent_typed(
 ///   - the typed factory the permit chain has ALREADY become — this runs
 ///     after `rewrite_to_from_raw`, so a chain written inline at the call
 ///     site reads `<Class>.from_raw(@params)` by now;
-///   - either of those under an in-place filter (`.except(:reason)`,
-///     `.compact`), which clears presence flags and returns the object
-///     itself. lobsters writes exactly that:
+///   - either of those under a filter (`.except(:reason)`, `.compact`)
+///     returning the same params class. lobsters writes exactly that:
 ///     `@hat_request.update!(params.require(:hat_request)
 ///     .permit(:hat, :link, :reason).except(:reason))`. Matching only the
 ///     first spelling left the typed object in a plain `update!`, whose
@@ -1350,6 +1484,26 @@ fn match_params_helper<'a>(
     helper_specs.get(method).copied()
 }
 
+/// Whether `<model_class>.<factory>` exists for this params class: the
+/// model lowerer synthesizes the typed factories only on the model a
+/// list's resource names, so `has_many :comments, class_name:
+/// "Feedback"` building from `comment_params` has none to call.
+fn has_typed_factory(model_class: &str, spec: &ParamsSpec) -> bool {
+    crate::naming::snake_case(model_class) == spec.resource.as_str()
+}
+
+/// Whether `read` is analyzed as a collection of `model_class`, the
+/// reader of an association to it.
+fn reads_collection_of(read: &Expr, model_class: &str) -> bool {
+    match read.ty.as_ref().map(Ty::peel_nilable) {
+        Some(Ty::Array { elem }) => {
+            matches!(elem.peel_nilable(), Ty::Class { id, .. } if id.0.as_str() == model_class)
+        }
+        Some(Ty::Relation { of }) => of.0.as_str() == model_class,
+        _ => false,
+    }
+}
+
 enum AssocKind {
     Build,
     /// `@parent.<assoc>.create!(<params>)` — `Build` plus the save it
@@ -1373,8 +1527,8 @@ enum AssocKind {
 pub(super) fn expand_build_typed(
     model_class: &str,
     fk: &str,
-    parent: &Symbol,
-    lhs: &Symbol,
+    parent: &Expr,
+    lhs: &LValue,
     arg: &Expr,
     factory: Symbol,
     span: Span,
@@ -1382,7 +1536,7 @@ pub(super) fn expand_build_typed(
     let from_params_call = Expr::new(
         span,
         ExprNode::Send {
-            recv: Some(const_path(&[model_class], span)),
+            recv: Some(model_const(model_class, span)),
             method: factory,
             args: vec![arg.clone()],
             block: None,
@@ -1392,7 +1546,7 @@ pub(super) fn expand_build_typed(
     let lhs_assign = Expr::new(
         span,
         ExprNode::Assign {
-            target: LValue::Ivar { name: lhs.clone() },
+            target: lhs.clone(),
             value: from_params_call,
         },
     );
@@ -1400,7 +1554,7 @@ pub(super) fn expand_build_typed(
     let parent_id = Expr::new(
         span,
         ExprNode::Send {
-            recv: Some(ivar(parent.as_str(), span)),
+            recv: Some(parent.clone()),
             method: Symbol::from("id"),
             args: vec![],
             block: None,
@@ -1410,7 +1564,7 @@ pub(super) fn expand_build_typed(
     let fk_setter = Expr::new(
         span,
         ExprNode::Send {
-            recv: Some(ivar(lhs.as_str(), span)),
+            recv: Some(build_target_read(lhs, span)),
             method: Symbol::from(format!("{fk}=")),
             args: vec![parent_id],
             block: None,
@@ -1418,7 +1572,7 @@ pub(super) fn expand_build_typed(
         },
     );
 
-    Expr::new(span, ExprNode::Seq { exprs: vec![lhs_assign, fk_setter] })
+    Expr::new(span, ExprNode::Seq { exprs: vec![lhs_assign, fk_setter, build_target_read(lhs, span)] })
 }
 
 /// `@<lhs> = @<parent>.<assoc>.create!(<params>)` — the typed build,
@@ -1437,9 +1591,13 @@ fn expand_create_typed(
     bang: bool,
     span: Span,
 ) -> Expr {
-    let built = expand_build_typed(model_class, fk, parent, lhs, arg, factory, span);
+    let built = expand_build_typed(
+        model_class, fk, &ivar(parent.as_str(), span),
+        &LValue::Ivar { name: lhs.clone() }, arg, factory, span,
+    );
     let ExprNode::Seq { exprs } = &*built.node else { unreachable!("build expands to a Seq") };
     let mut exprs = exprs.clone();
+    exprs.pop().expect("typed build result");
     exprs.push(Expr::new(
         span,
         ExprNode::Send {
@@ -1465,14 +1623,14 @@ fn expand_create_typed(
 fn expand_build_bare(
     model_class: &str,
     fk: &str,
-    parent: &Symbol,
-    lhs: &Symbol,
+    parent: &Expr,
+    lhs: &LValue,
     span: Span,
 ) -> Expr {
     let new_call = Expr::new(
         span,
         ExprNode::Send {
-            recv: Some(const_path(&[model_class], span)),
+            recv: Some(model_const(model_class, span)),
             method: Symbol::from("new"),
             args: vec![],
             block: None,
@@ -1481,12 +1639,12 @@ fn expand_build_bare(
     );
     let lhs_assign = Expr::new(
         span,
-        ExprNode::Assign { target: LValue::Ivar { name: lhs.clone() }, value: new_call },
+        ExprNode::Assign { target: lhs.clone(), value: new_call },
     );
     let parent_id = Expr::new(
         span,
         ExprNode::Send {
-            recv: Some(ivar(parent.as_str(), span)),
+            recv: Some(parent.clone()),
             method: Symbol::from("id"),
             args: vec![],
             block: None,
@@ -1496,48 +1654,34 @@ fn expand_build_bare(
     let fk_setter = Expr::new(
         span,
         ExprNode::Send {
-            recv: Some(ivar(lhs.as_str(), span)),
+            recv: Some(build_target_read(lhs, span)),
             method: Symbol::from(format!("{fk}=")),
             args: vec![parent_id],
             block: None,
             parenthesized: false,
         },
     );
-    Expr::new(span, ExprNode::Seq { exprs: vec![lhs_assign, fk_setter] })
+    Expr::new(span, ExprNode::Seq { exprs: vec![lhs_assign, fk_setter, build_target_read(lhs, span)] })
 }
 
 pub(super) fn expand_build(
     model_class: &str,
     fk: &str,
-    parent: &Symbol,
-    lhs: &Symbol,
+    parent: &Expr,
+    lhs: &LValue,
     arg: &Expr,
     span: Span,
 ) -> Expr {
-    // attrs = <arg>
-    // The `.to_h` wrap is added by the params-helpers pass when <arg>
-    // is a `<x>_params` call — keeping the two concerns separate avoids
-    // double-wrapping if <arg> already has `.to_h` for some reason.
-    // A braceless keyword hash (`comments.new(body: nil)`) needs its
-    // braces as an assignment's right-hand side, or the emitted
-    // `attrs = body: nil` is a syntax error.
+    // Hash#merge copies the caller's attributes and lets the declared
+    // owner key win. Both the attributes and the owner id run once.
     let mut value = arg.clone();
     if let ExprNode::Hash { kwargs, .. } = &mut *value.node {
         *kwargs = false;
     }
-    let attrs_assign = Expr::new(
-        span,
-        ExprNode::Assign {
-            target: LValue::Var { id: VarId(0), name: Symbol::from("attrs") },
-            value,
-        },
-    );
-
-    // attrs[:<fk>] = @<parent>.id
     let parent_id = Expr::new(
         span,
         ExprNode::Send {
-            recv: Some(ivar(parent.as_str(), span)),
+            recv: Some(parent.clone()),
             method: Symbol::from("id"),
             args: vec![],
             block: None,
@@ -1548,25 +1692,18 @@ pub(super) fn expand_build(
         span,
         ExprNode::Lit { value: Literal::Sym { value: Symbol::from(fk) } },
     );
-    let attrs_var = Expr::new(
-        span,
-        ExprNode::Var { id: VarId(0), name: Symbol::from("attrs") },
-    );
-    let index_assign = Expr::new(
-        span,
-        ExprNode::Assign {
-            target: LValue::Index { recv: attrs_var.clone(), index: fk_sym },
-            value: parent_id,
-        },
-    );
-
-    // @<lhs> = <Class>.new(attrs)
+    let attributes = Expr::new(span, ExprNode::Send {
+        recv: Some(value), method: Symbol::from("merge"),
+        args: vec![Expr::new(span, ExprNode::Hash {
+            entries: vec![(fk_sym, parent_id)], kwargs: true,
+        })], block: None, parenthesized: true,
+    });
     let new_call = Expr::new(
         span,
         ExprNode::Send {
-            recv: Some(const_path(&[model_class], span)),
+            recv: Some(model_const(model_class, span)),
             method: Symbol::from("new"),
-            args: vec![attrs_var],
+            args: vec![attributes],
             block: None,
             parenthesized: true,
         },
@@ -1574,15 +1711,97 @@ pub(super) fn expand_build(
     let final_assign = Expr::new(
         span,
         ExprNode::Assign {
-            target: LValue::Ivar { name: lhs.clone() },
+            target: lhs.clone(),
             value: new_call,
         },
     );
 
     Expr::new(
         span,
-        ExprNode::Seq { exprs: vec![attrs_assign, index_assign, final_assign] },
+        ExprNode::Seq { exprs: vec![final_assign] },
     )
+}
+
+fn build_target_read(target: &LValue, span: Span) -> Expr {
+    Expr::new(span, match target {
+        LValue::Var { id, name } => ExprNode::Var { id: *id, name: name.clone() },
+        LValue::Ivar { name } => ExprNode::Ivar { name: name.clone() },
+        _ => unreachable!("build destination is a local or instance variable"),
+    })
+}
+
+fn fresh_build_local(role: &str, names: &mut HashSet<Symbol>) -> Symbol {
+    // No leading underscore: Elixir reads `_name` as "deliberately
+    // ignored" and warns when the body then uses it; the elixir
+    // toolchain compiles with `--warnings-as-errors`. Same rule as
+    // `synth_has_many_id_reader`'s `rh_id_record`.
+    for n in 0.. {
+        let name = Symbol::from(format!("rh_build_{role}_{n}"));
+        if names.insert(name.clone()) { return name; }
+    }
+    unreachable!("local name space exhausted")
+}
+
+fn collect_build_local_names(expr: &Expr, names: &mut HashSet<Symbol>) {
+    match &*expr.node {
+        ExprNode::Var { name, .. } | ExprNode::Let { name, .. } => { names.insert(name.clone()); }
+        ExprNode::Assign { target: LValue::Var { name, .. }, .. }
+        | ExprNode::OpAssign { target: LValue::Var { name, .. }, .. } => { names.insert(name.clone()); }
+        ExprNode::MultiAssign { targets, .. } => {
+            for target in targets {
+                if let LValue::Var { name, .. } = target { names.insert(name.clone()); }
+            }
+        }
+        ExprNode::Lambda { params, rest_param, extra_params, block_param, .. } => {
+            names.extend(params.iter().chain(rest_param.iter()).chain(block_param.iter()).cloned());
+            names.extend(extra_params.iter().map(|p| p.name.clone()));
+        }
+        ExprNode::BeginRescue { rescues, .. } => {
+            names.extend(rescues.iter().filter_map(|r| r.binding.clone()));
+        }
+        _ => {}
+    }
+    expr.node.for_each_child(&mut |child| collect_build_local_names(child, names));
+}
+
+fn collect_expression_assigns(expr: &Expr, statement: bool, spans: &mut HashSet<Span>) {
+    if !statement && matches!(&*expr.node, ExprNode::Assign { .. }) {
+        spans.insert(expr.span);
+    }
+    match &*expr.node {
+        ExprNode::Seq { exprs } => {
+            for child in exprs { collect_expression_assigns(child, true, spans); }
+        }
+        ExprNode::If { cond, then_branch, else_branch } => {
+            collect_expression_assigns(cond, false, spans);
+            collect_expression_assigns(then_branch, true, spans);
+            collect_expression_assigns(else_branch, true, spans);
+        }
+        ExprNode::While { cond, body, .. } => {
+            collect_expression_assigns(cond, false, spans);
+            collect_expression_assigns(body, true, spans);
+        }
+        ExprNode::Lambda { body, extra_params, .. } => {
+            for param in extra_params {
+                if let Some(default) = &param.default { collect_expression_assigns(default, false, spans); }
+            }
+            collect_expression_assigns(body, true, spans);
+        }
+        ExprNode::Case { scrutinee, arms } => {
+            collect_expression_assigns(scrutinee, false, spans);
+            for arm in arms { collect_expression_assigns(&arm.body, true, spans); }
+        }
+        ExprNode::BeginRescue { body, rescues, else_branch, ensure, .. } => {
+            collect_expression_assigns(body, true, spans);
+            for rescue in rescues {
+                for class in &rescue.classes { collect_expression_assigns(class, false, spans); }
+                collect_expression_assigns(&rescue.body, true, spans);
+            }
+            if let Some(branch) = else_branch { collect_expression_assigns(branch, true, spans); }
+            if let Some(branch) = ensure { collect_expression_assigns(branch, true, spans); }
+        }
+        _ => expr.node.for_each_child(&mut |child| collect_expression_assigns(child, false, spans)),
+    }
 }
 
 pub(super) fn expand_find(
@@ -1597,7 +1816,7 @@ pub(super) fn expand_find(
     let find_call = Expr::new(
         span,
         ExprNode::Send {
-            recv: Some(const_path(&[model_class], span)),
+            recv: Some(model_const(model_class, span)),
             method: Symbol::from("find"),
             args: vec![arg.clone()],
             block: None,
@@ -1799,9 +2018,9 @@ pub(super) fn rewrite_update_to_typed_variant(
         // The variant exists only on the model the resource is named
         // after. With none (a record wrapped under another key), the
         // call stays Rails' `update` / `update!`; once the body is typed,
-        // `params::hand_update_the_attrs` gives it the attribute Hash
+        // `typed_update::hand_update_the_attrs` gives it the attribute Hash
         // when the argument turns out to be the params object (#856).
-        if !params_specs.has_typed_update(spec) {
+        if !super::typed_update::has_typed_update(params_specs, spec) {
             return None;
         }
         Some(Expr::new(
@@ -2873,6 +3092,12 @@ pub(crate) fn const_path(segments: &[&str], span: Span) -> Expr {
             path: segments.iter().map(|s| Symbol::from(*s)).collect(),
         },
     )
+}
+
+/// A model class as a constant, one path segment per `::`-separated
+/// name (`class_name: "Push::Subscription"`).
+fn model_const(model_class: &str, span: Span) -> Expr {
+    const_path(&model_class.split("::").collect::<Vec<_>>(), span)
 }
 
 /// Like `const_path`, but stamps `Ty::Class` so the emit-time

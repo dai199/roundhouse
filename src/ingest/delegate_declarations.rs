@@ -44,6 +44,10 @@ pub(super) struct DelegateEligibility<'a> {
     called_with_args: &'a CallsWithArguments,
     blocked_names: &'a HashSet<String>,
     supported_target_methods: Option<&'a HashSet<(String, String, usize)>>,
+    /// Targets the forwarder calls as a method of the declaring class
+    /// itself, whose answer only analysis can type: exempt from
+    /// `supported_target_methods`, which knows association targets only.
+    method_targets: &'a HashSet<String>,
     sources: &'a [crate::span::SourceFile],
     visibility_cache: HashMap<crate::span::FileId, HashMap<usize, MethodVisibility>>,
 }
@@ -54,6 +58,7 @@ impl<'a> DelegateEligibility<'a> {
         called_with_args: &'a CallsWithArguments,
         blocked_names: &'a HashSet<String>,
         supported_target_methods: Option<&'a HashSet<(String, String, usize)>>,
+        method_targets: &'a HashSet<String>,
         sources: &'a [crate::span::SourceFile],
     ) -> Self {
         Self {
@@ -61,6 +66,7 @@ impl<'a> DelegateEligibility<'a> {
             called_with_args,
             blocked_names,
             supported_target_methods,
+            method_targets,
             sources,
             visibility_cache: HashMap::new(),
         }
@@ -79,23 +85,30 @@ impl<'a> DelegateEligibility<'a> {
             self.visibility_cache
                 .entry(call.span.file)
                 .or_insert_with(|| {
-                    super::super::sources::with_text(&file, |source| {
-                        super::super::visibility::Visibility::declaration_defaults(source, &file)
-                    })
-                    .or_else(|| {
-                        call.span
-                            .file
-                            .0
-                            .checked_sub(1)
-                            .and_then(|index| self.sources.get(index as usize))
-                            .map(|source| {
-                                super::super::visibility::Visibility::declaration_defaults(
-                                    &source.text,
-                                    &source.path,
-                                )
-                            })
-                    })
-                    .unwrap_or_default()
+                    // Clone text first — `declaration_defaults` re-parses via
+                    // `prism::parse_silent`, which mutates the sources
+                    // registry. `with_text` would hold an immutable borrow
+                    // across that call and panic (`RefCell already borrowed`).
+                    super::super::sources::text_of(&file)
+                        .map(|source| {
+                            super::super::visibility::Visibility::declaration_defaults(
+                                &source, &file,
+                            )
+                        })
+                        .or_else(|| {
+                            call.span
+                                .file
+                                .0
+                                .checked_sub(1)
+                                .and_then(|index| self.sources.get(index as usize))
+                                .map(|source| {
+                                    super::super::visibility::Visibility::declaration_defaults(
+                                        &source.text,
+                                        &source.path,
+                                    )
+                                })
+                        })
+                        .unwrap_or_default()
                 });
         let Some(&visibility) = visibility_defaults.get(&(call.span.start as usize)) else {
             super::super::survey::record(&crate::ingest::IngestError::Unsupported {
@@ -156,7 +169,8 @@ impl<'a> DelegateEligibility<'a> {
         }
         if self.supported_target_methods.is_some_and(|supported| {
             entries.iter().any(|entry| {
-                !supported.contains(&(
+                !self.method_targets.contains(entry.target.as_str())
+                    && !supported.contains(&(
                     entry.target.as_str().to_string(),
                     entry.method.as_str().to_string(),
                     synthesized_arity(entry.method.as_str()),
@@ -234,7 +248,7 @@ fn parse_declaration(call: &Expr) -> Option<ParsedDeclaration> {
     else {
         return None;
     };
-    if call.diagnostic.is_some() || method.as_str() != "delegate" {
+    if call.diagnostic().is_some() || method.as_str() != "delegate" {
         return None;
     }
 

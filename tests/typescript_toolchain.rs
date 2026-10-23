@@ -15,6 +15,14 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "support/memoized_fields.rs"]
+mod memoized_fields;
+#[path = "support/app_class_base.rs"]
+mod app_class_base;
+#[path = "support/parenless_calls.rs"]
+mod parenless_calls;
+#[path = "support/model_class_methods.rs"]
+mod model_class_methods;
 #[path = "support/emit_and_run.rs"]
 #[allow(dead_code)]
 mod emit_and_run;
@@ -24,6 +32,8 @@ mod nested_classes;
 mod array_methods;
 #[path = "support/truthiness.rs"]
 mod truthiness;
+#[path = "support/class_constants.rs"]
+mod class_constants;
 
 use roundhouse::emit::typescript;
 use roundhouse::ingest::ingest_app;
@@ -286,6 +296,84 @@ fn run_under_tsx(emitted: &Path, script: &str) -> String {
 
 #[test]
 #[ignore]
+fn real_blog_memoized_fields_run_under_tsx() {
+    // Readers memoizing a literal answer it, on a plain class's two sides
+    // and on a model, as CRuby does (#1238); the app compiles.
+    let (emitted, errors) = memoized_fields::overlay().emit(roundhouse::project::BuildTarget::Typescript);
+    assert!(errors.is_empty(), "{errors:?}");
+    let out = run_under_tsx(
+        &emitted,
+        "import { Meter } from \"./app/models/meter.js\";\nimport { Comment } from \"./app/models/comment.js\";\nconst m = new Meter();\nconsole.log(JSON.stringify([Meter.label, m.name, m.items, new Comment().tone]));\n",
+    );
+    assert_eq!(out, memoized_fields::SUMMARY);
+    std::fs::remove_file(emitted.join("check.ts")).unwrap();
+    assert_tsc_passes("real-blog with memoized readers", &emitted);
+}
+
+#[test]
+#[ignore]
+fn real_blog_app_class_named_like_the_alias_runs_under_tsx() {
+    // An app `ActiveRecordBase` beside an app `Base`: the runtime base
+    // takes another alias, and the app compiles and answers as CRuby.
+    let (emitted, errors) = app_class_base::alias_taken_overlay().emit(roundhouse::project::BuildTarget::Typescript);
+    assert!(errors.is_empty(), "{errors:?}");
+    let out = run_under_tsx(
+        &emitted,
+        "import { Gadget } from \"./app/models/gadget.js\";\nconsole.log(Gadget.both());\n",
+    );
+    assert_eq!(out, app_class_base::BOTH);
+    std::fs::remove_file(emitted.join("check.ts")).unwrap();
+    assert_tsc_passes("real-blog with app Base and ActiveRecordBase", &emitted);
+}
+
+#[test]
+#[ignore]
+fn real_blog_app_class_base_runs_under_tsx() {
+    // A class extending the app's own `Base` reads its class method and
+    // constant as CRuby does, and the app, whose records and controllers
+    // extend the runtime's base classes under aliases, compiles (#1228).
+    let (emitted, errors) = app_class_base::overlay().emit(roundhouse::project::BuildTarget::Typescript);
+    assert!(errors.is_empty(), "{errors:?}");
+    let out = run_under_tsx(
+        &emitted,
+        "import { Widget } from \"./app/models/widget.js\";\nconsole.log([Widget.label(), Widget.LABEL].join(\",\"));\n",
+    );
+    assert_eq!(out, app_class_base::SUMMARY);
+    std::fs::remove_file(emitted.join("check.ts")).unwrap();
+    assert_tsc_passes("real-blog with an app Base", &emitted);
+}
+
+#[test]
+#[ignore]
+fn real_blog_parenless_calls_run_under_tsx() {
+    // A zero-argument `def` called without parens answers its value on a
+    // plain class, from a subclass's class method and from a model's
+    // class method, as CRuby does (#1229).
+    let (emitted, errors) = parenless_calls::overlay().emit(roundhouse::project::BuildTarget::Typescript);
+    assert!(errors.is_empty(), "{errors:?}");
+    let out = run_under_tsx(
+        &emitted,
+        "import { Meter } from \"./app/models/meter.js\";\nimport { Widget } from \"./app/models/widget.js\";\nimport { Comment } from \"./app/models/comment.js\";\nimport { Gauge } from \"./app/models/gauge.js\";\nconsole.log([Meter.a(), Meter.b(), Meter.c(), new Meter().e(), Widget.shout(), Comment.tags(), Gauge.show(), new Gauge().both()].join(\",\"));\n",
+    );
+    assert_eq!(out, parenless_calls::SUMMARY);
+}
+
+#[test]
+#[ignore]
+fn real_blog_model_class_methods_run_under_tsx() {
+    // A model's class method calling another without a receiver answers
+    // as CRuby does (#1236).
+    let (emitted, errors) = model_class_methods::overlay().emit(roundhouse::project::BuildTarget::Typescript);
+    assert!(errors.is_empty(), "{errors:?}");
+    let out = run_under_tsx(
+        &emitted,
+        "import { Comment } from \"./app/models/comment.js\";\nconsole.log([Comment.loud_tag(), Comment.tag_size()].join(\",\"));\n",
+    );
+    assert_eq!(out, model_class_methods::SUMMARY);
+}
+
+#[test]
+#[ignore]
 fn real_blog_nested_classes_run_under_tsx() {
     // Classes nested under a class and a module, raised, rescued and
     // built from another file, answer as CRuby does.
@@ -296,6 +384,48 @@ fn real_blog_nested_classes_run_under_tsx() {
         "import { Report } from \"./app/models/report.js\";\nconsole.log(Report.summary());\n",
     );
     assert_eq!(out, nested_classes::SUMMARY);
+}
+
+#[test]
+#[ignore]
+fn real_blog_class_constants_run_under_tsx() {
+    // A class's own constants of each literal kind, read from a class
+    // method, answer as CRuby does (#1223).
+    let (emitted, errors) = class_constants::overlay().emit(roundhouse::project::BuildTarget::Typescript);
+    assert!(errors.is_empty(), "{errors:?}");
+    let out = run_under_tsx(
+        &emitted,
+        "import { Scale } from \"./app/models/scale.js\";\nconsole.log(Scale.summary());\n",
+    );
+    assert_eq!(out, class_constants::SUMMARY);
+}
+
+#[test]
+#[ignore]
+fn real_blog_model_constant_reads_run_under_tsx() {
+    // A model method reading its own constants through `fetch`, `key?`,
+    // `keys`, `first` and `[]` answers as CRuby does (#1223 b).
+    let (emitted, errors) = class_constants::gauge_overlay().emit(roundhouse::project::BuildTarget::Typescript);
+    assert!(errors.is_empty(), "{errors:?}");
+    let out = run_under_tsx(
+        &emitted,
+        "import { Gauge } from \"./app/models/gauge.js\";\nconst g = new Gauge();\ng.size = \"large\";\nconsole.log(g.summary() + \";\" + Gauge.heaviest() + \";\" + Gauge.probe());\n",
+    );
+    assert_eq!(out, format!("{};9;true,false,true", class_constants::GAUGE_SUMMARY));
+}
+
+#[test]
+#[ignore]
+fn real_blog_shadowing_constant_runs_under_tsx() {
+    // A child's constant shadowing its parent's answers its own value, and
+    // the parent's still answers the parent's (#1223).
+    let (emitted, errors) = class_constants::shadow_overlay().emit(roundhouse::project::BuildTarget::Typescript);
+    assert!(errors.is_empty(), "{errors:?}");
+    let out = run_under_tsx(
+        &emitted,
+        "import { Dial } from \"./app/models/dial.js\";\nconsole.log(Dial.summary());\n",
+    );
+    assert_eq!(out, class_constants::SHADOW_SUMMARY);
 }
 
 #[test]
