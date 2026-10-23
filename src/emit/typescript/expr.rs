@@ -671,6 +671,17 @@ fn async_iife_awaited(span: Span, stmts: Vec<JsStmt>) -> Js {
     )
 }
 
+/// `Object.prototype.hasOwnProperty.call(obj, key)`: an own key, as Ruby's
+/// `Hash#key?` answers (`key in obj` also finds the prototype's).
+fn has_own(span: Span, obj: Js, key: Js) -> Js {
+    let has = Js::member(
+        Span::synthetic(),
+        Js::member(Span::synthetic(), Js::member(Span::synthetic(), synth_ident("Object"), "prototype"), "hasOwnProperty"),
+        "call",
+    );
+    Js::call(span, has, vec![obj, key])
+}
+
 /// `(() => { throw new Error("<msg>"); })()`
 fn iife_throw_msg(span: Span, msg: &str) -> Js {
     let err = Js::synth(JsExpr::New {
@@ -948,7 +959,7 @@ fn count_var_assignments(e: &Expr, out: &mut HashMap<Symbol, usize>) {
         ExprNode::Send { recv: Some(recv), method, args, block, .. }
             if method.as_str() == "<<" && args.len() == 1 =>
         {
-            let is_string_builder_append = matches!(e.hint, Some(IrHint::StringBuilderAppend));
+            let is_string_builder_append = matches!(e.hint(), Some(IrHint::StringBuilderAppend));
             if !is_string_builder_append {
                 if let ExprNode::Var { name, .. } = &*recv.node {
                     *out.entry(name.clone()).or_insert(0) += 1;
@@ -1133,7 +1144,7 @@ pub(super) fn collect_reassigned(body: &Expr) -> HashSet<Symbol> {
 ///   site is the function's tail; an Append at the tail would be
 ///   a lowerer bug).
 fn try_string_builder_stmt(e: &Expr, declared: &mut HashSet<Symbol>) -> Option<Vec<JsStmt>> {
-    match e.hint? {
+    match e.hint().as_ref()? {
         IrHint::MutableStringLiteral => None, // emitted as the plain literal
         IrHint::StringBuilderInit => {
             if let ExprNode::Assign { target: LValue::Var { name, .. }, .. } = &*e.node {
@@ -1568,7 +1579,7 @@ pub(super) fn js_expr(e: &Expr) -> Js {
     }
     // Analyzer-set diagnostic annotations short-circuit to a target
     // raise-equivalent (preserves Ruby's runtime-raise semantics).
-    if let Some(kind) = &e.diagnostic {
+    if let Some(kind) = &e.diagnostic() {
         return Js::new(
             e.span,
             JsExpr::Raw(
@@ -1583,7 +1594,7 @@ pub(super) fn js_expr(e: &Expr) -> Js {
     // Append-inside-lambda (`articles.forEach(a => io << render(a))`
     // — the partial lowerer's collection-render shape) and the
     // terminal Result Var read at the function tail.
-    match e.hint {
+    match e.hint() {
         Some(IrHint::StringBuilderAppend) => {
             if let ExprNode::Send { recv: Some(recv), method, args, .. } = &*e.node {
                 if method.as_str() == "<<" && args.len() == 1 {
@@ -1907,7 +1918,7 @@ fn js_send_with_block(
     parenthesized: bool,
 ) -> Js {
     let Some(blk) = block else {
-        return js_send(span, recv, method, args, parenthesized);
+        return js_send(span, recv, method, args, parenthesized, None);
     };
     let predicate = recv.and(ruby_predicate_block(method, blk));
     let blk = predicate.as_ref().unwrap_or(blk);
@@ -1976,7 +1987,10 @@ fn js_send_with_block(
     }
     let mut all_args: Vec<Expr> = args.to_vec();
     all_args.push(blk.clone());
-    js_send(span, recv, method, &all_args, true)
+    // The block is already in `all_args`. Passing it here keeps
+    // `function_receiver` from treating `.call` as a direct invocation
+    // and dropping the block into a positional argument.
+    js_send(span, recv, method, &all_args, true, Some(blk))
 }
 
 /// HOF rewrites for blocks containing async sends. Returns
@@ -2155,8 +2169,9 @@ fn js_send(
     method: &str,
     args: &[Expr],
     parenthesized: bool,
+    block: Option<&Expr>,
 ) -> Js {
-    let result = js_send_inner(span, recv, method, args, parenthesized);
+    let result = js_send_inner(span, recv, method, args, parenthesized, block);
     if !is_async_method_name(method) {
         return result;
     }
@@ -2198,7 +2213,20 @@ fn js_send_inner(
     method: &str,
     args: &[Expr],
     parenthesized: bool,
+    block: Option<&Expr>,
 ) -> Js {
+    if let Some(recv) = crate::emit::shared::fn_call::function_receiver(recv, method, block) {
+        return Js::call(span, js_expr(recv), args.iter().map(js_expr).collect());
+    }
+    // `x.freeze` answers `x`, whatever its type: no JS value has a
+    // `freeze` method (only the static `Object.freeze`), so the bare
+    // property read was `undefined`, as in a constant's nested
+    // `[1, 2].freeze` (#1223).
+    if method == "freeze" && args.is_empty() && block.is_none() {
+        if let Some(r) = recv {
+            return js_expr(r);
+        }
+    }
     // Temporal reader intrinsic: `ActiveSupport.parse_db_time(s)` parses
     // stored ISO-8601 text into a native `Date` (nil-safe: `string | null`
     // → `Date | null`). Maps to the hand-written `RhDateTime.parse`
@@ -3323,7 +3351,7 @@ fn js_send_inner(
                     js.span = span;
                     return js;
                 }
-                "slice" => return js_send_inner(span, recv, "[]", args, true),
+                "slice" => return js_send_inner(span, recv, "[]", args, true, None),
                 "capitalize" if args.is_empty() => {
                     // JS has no built-in capitalize. Match Ruby's
                     // semantics: uppercase the first char, lowercase
@@ -3474,8 +3502,10 @@ fn js_send_inner(
                     Js::method_call(span, synth_ident("Object"), "keys", vec![js_expr(r)])
                 };
                 match method {
+                    // An own key, as Ruby's `Hash#key?` answers: `in` also
+                    // finds `Object.prototype`'s (`"constructor"`).
                     "key?" | "has_key?" | "include?" if args.len() == 1 => {
-                        return Js::binary(span, "in", js_expr(&args[0]), js_expr(r));
+                        return has_own(span, js_expr(r), js_expr(&args[0]));
                     }
                     "empty?" if args.is_empty() => {
                         return Js::binary(
@@ -3552,18 +3582,60 @@ fn js_send_inner(
                     // permitted field; without this rewrite the Send
                     // emits literally and tsc rejects since
                     // `Record<string, any>` has no `.fetch`. The
-                    // single-arg form becomes a bracket index — Ruby's
-                    // KeyError on missing key isn't modeled in TS.
+                    // single-arg form raises on a missing key, as Ruby's
+                    // KeyError does (it is typed the value, never nil).
+                    // `(() => { const h = r; const k = key; const d = default;
+                    // return own(h, k) ? h[k] : d; })()`: the default only on
+                    // a missing key, so a key holding nil answers nil (`??`
+                    // read it as missing); each operand read once, the
+                    // default eagerly, as Ruby evaluates its arguments.
                     "fetch" if args.len() == 2 => {
-                        return Js::binary(
+                        let pick = Js::new(
                             span,
-                            "??",
-                            Js::index(span, js_expr(r), js_expr(&args[0])),
-                            js_expr(&args[1]),
+                            JsExpr::Ternary {
+                                cond: has_own(span, synth_ident("h"), synth_ident("k")),
+                                then: Js::index(span, synth_ident("h"), synth_ident("k")),
+                                else_: synth_ident("d"),
+                            },
+                        );
+                        return iife(
+                            span,
+                            vec![
+                                const_decl("h", js_expr(r)),
+                                const_decl("k", js_expr(&args[0])),
+                                const_decl("d", js_expr(&args[1])),
+                                return_stmt(Some(pick)),
+                            ],
                         );
                     }
+                    // `(() => { const h = r; const k = key; if (!own(h, k))
+                    // throw new Error(…); return h[k]; })()`: receiver and
+                    // key read once; a present key holding nil answers it,
+                    // and an Object.prototype name is not a key.
                     "fetch" if args.len() == 1 => {
-                        return Js::index(span, js_expr(r), js_expr(&args[0]));
+                        let missing = Js::unary(span, "!", has_own(span, synth_ident("h"), synth_ident("k")));
+                        let err = Js::synth(JsExpr::New {
+                            callee: synth_ident("Error"),
+                            args: vec![Js::binary(
+                                span,
+                                "+",
+                                Js::str(Span::synthetic(), "key not found: "),
+                                synth_ident("k"),
+                            )],
+                        });
+                        return iife(
+                            span,
+                            vec![
+                                const_decl("h", js_expr(r)),
+                                const_decl("k", js_expr(&args[0])),
+                                JsStmt::synth(JsStmtNode::If {
+                                    cond: missing,
+                                    then: vec![JsStmt::synth(JsStmtNode::Throw(err))],
+                                    else_: None,
+                                }),
+                                return_stmt(Some(Js::index(span, synth_ident("h"), synth_ident("k")))),
+                            ],
+                        );
                     }
                     "dup" | "clone" if args.is_empty() => {
                         return Js::new(
@@ -4078,17 +4150,81 @@ pub(super) fn js_literal(span: Span, lit: &Literal) -> Js {
             // string-boundary in practice (no `m` → no per-line shift),
             // matching Ruby `\A` / `\z` for the framework's use cases
             // (validates_format_of, route param matching, etc.).
+            //
+            // Ruby's `m` flag is "dot matches newline" (JS `s`), and
+            // Ruby's `^`/`$` are line anchors with or without it (JS
+            // `m`), so a flagged `m` emits both. With JS's `m` on, `^`/`$`
+            // no longer stand for Ruby's string anchors, which then
+            // become lookarounds instead.
+            let multiline = flags.contains('m');
             Js::new(
                 span,
                 JsExpr::Regex {
-                    pattern: translate_ruby_regex_anchors(pattern),
-                    flags: flags.clone(),
+                    pattern: translate_ruby_regex_anchors(pattern, multiline),
+                    flags: crate::emit::shared::regex_literal::translate_ruby_flags_for_re2_style_m(flags),
                 },
             )
         }
     }
 }
 
+#[cfg(test)]
+mod regex_flag_tests {
+    fn pattern_and_flags(pattern: &str, flags: &str) -> (String, String) {
+        let lit = Literal::Regex { pattern: pattern.to_string(), flags: flags.to_string() };
+        match *js_literal(Span::synthetic(), &lit).node {
+            super::JsExpr::Regex { pattern, flags } => (pattern, flags),
+            other => panic!("expected JsExpr::Regex, got {other:?}"),
+        }
+    }
+
+    /// Ruby's `^`/`$` are line anchors and `m` adds dot-matches-newline:
+    /// JS needs both `s` and `m`. With `m` on, JS's `^`/`$` are line
+    /// anchors, so Ruby's string anchors `\A`/`\z`/`\Z` can no longer
+    /// be spelled `^`/`$`.
+    #[test]
+    fn rubys_m_keeps_line_anchors_and_string_anchors_stay_absolute() {
+        assert_eq!(pattern_and_flags("^b.c$", "m"), ("^b.c$".to_string(), "sm".to_string()));
+        assert_eq!(
+            pattern_and_flags("\\Aa.b\\z", "m"),
+            ("(?<![\\s\\S])a.b(?![\\s\\S])".to_string(), "sm".to_string())
+        );
+        assert_eq!(pattern_and_flags("a\\Z", "im").0, "a(?=\\n?(?![\\s\\S]))");
+        // Without `m`, unchanged.
+        assert_eq!(pattern_and_flags("\\Aa\\z", ""), ("^a$".to_string(), String::new()));
+    }
+
+    use super::js_literal;
+    use crate::expr::Literal;
+    use crate::span::Span;
+
+    fn flags_of(pattern: &str, flags: &str) -> String {
+        let lit = Literal::Regex { pattern: pattern.to_string(), flags: flags.to_string() };
+        match *js_literal(Span::synthetic(), &lit).node {
+            super::JsExpr::Regex { flags, .. } => flags,
+            other => panic!("expected JsExpr::Regex, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ignore_case_passes_through_as_js_i() {
+        assert_eq!(flags_of("a.b", "i"), "i");
+    }
+
+    #[test]
+    fn rubys_m_maps_to_js_s_and_m() {
+        // Ruby's `m` is JS `s` (dot-all). Ruby's `^`/`$` are always
+        // line anchors, so flagged `m` also needs JS `m`. Absolute
+        // anchors `\A`/`\z`/`\Z` then use lookarounds — covered by
+        // `rubys_m_keeps_line_anchors_and_string_anchors_stay_absolute`.
+        assert_eq!(flags_of("a.b", "m"), "sm");
+    }
+
+    #[test]
+    fn ignore_case_and_dot_matches_newline_combine() {
+        assert_eq!(flags_of("a.b", "im"), "ism");
+    }
+}
 
 /// Classify a `gsub` pattern into the JS pattern expression and the
 /// method name (`replace` vs `replaceAll`).
@@ -4123,16 +4259,18 @@ fn gsub_pattern_and_method(pat: &Expr) -> (Js, &'static str) {
         value: Literal::Regex { pattern, flags },
     } = &*pat.node
     {
-        let new_flags = if flags.contains('g') {
-            flags.clone()
+        // Same translation as a plain regex literal (`js_literal`), plus `g`.
+        let js_flags = crate::emit::shared::regex_literal::translate_ruby_flags_for_re2_style_m(flags);
+        let new_flags = if js_flags.contains('g') {
+            js_flags
         } else {
-            format!("{flags}g")
+            format!("{js_flags}g")
         };
         return (
             Js::new(
                 pat.span,
                 JsExpr::Regex {
-                    pattern: translate_ruby_regex_anchors(pattern),
+                    pattern: translate_ruby_regex_anchors(pattern, flags.contains('m')),
                     flags: new_flags,
                 },
             ),
@@ -4189,14 +4327,22 @@ fn gsub_pattern_and_method(pat: &Expr) -> (Js, &'static str) {
 /// backslash followed by `A`/`z`/`Z` doesn't get clobbered.
 /// Strict-end `\Z` differs from `\z` only in trailing-newline
 /// handling — close enough to `$` for these targets.
-fn translate_ruby_regex_anchors(pattern: &str) -> String {
+fn translate_ruby_regex_anchors(pattern: &str, multiline: bool) -> String {
     let mut out = String::with_capacity(pattern.len());
     let mut chars = pattern.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '\\' {
             match chars.peek() {
                 Some('A') => {
-                    out.push('^');
+                    out.push_str(if multiline { "(?<![\\s\\S])" } else { "^" });
+                    chars.next();
+                }
+                Some('z') if multiline => {
+                    out.push_str("(?![\\s\\S])");
+                    chars.next();
+                }
+                Some('Z') if multiline => {
+                    out.push_str("(?=\\n?(?![\\s\\S]))");
                     chars.next();
                 }
                 Some('z') | Some('Z') => {
