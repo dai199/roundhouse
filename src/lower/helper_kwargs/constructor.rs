@@ -12,6 +12,7 @@ use crate::ident::Symbol;
 use super::{Slot, slot_of};
 use super::owned::{Defined, OwnerIndex, Side};
 
+use crate::ingest::prism_api::PrismLocation;
 pub(super) struct InstanceCallParams {
     pub(super) slots: HashMap<(String, Symbol), Vec<Slot>>,
     pub(super) custom_new_slots: HashMap<(String, Symbol), Vec<Slot>>,
@@ -356,7 +357,7 @@ pub(super) fn refuse_keyword_splats(
     if let Some(reason) =
         constructor_refusal_reason(params, expr.span, id.0.as_str(), class_name, args)
     {
-        refuse_constructor(expr.span, &mut expr.diagnostic, reason, diagnostics);
+        refuse_constructor(expr.span, crate::expr::ExprCold::diagnostic_mut(&mut expr.cold), reason, diagnostics);
     }
 }
 
@@ -523,7 +524,7 @@ fn rewrite_instance_call(
     diagnostics: &mut Vec<crate::diagnostic::Diagnostic>,
 ) {
     if matches!(
-        &expr.diagnostic,
+        &expr.diagnostic(),
         Some(crate::diagnostic::DiagnosticKind::Unsupported { construct, .. })
             if construct.as_str() == crate::diagnostic::CONSTRUCTOR_KEYWORD_ARGUMENTS
     ) {
@@ -558,7 +559,7 @@ fn rewrite_instance_call(
         if let Some(reason) =
             constructor_refusal_reason(params, expr.span, id.0.as_str(), class_id, args)
         {
-            refuse_constructor(expr.span, &mut expr.diagnostic, reason, diagnostics);
+            refuse_constructor(expr.span, crate::expr::ExprCold::diagnostic_mut(&mut expr.cold), reason, diagnostics);
             return;
         }
         if params.custom_new.contains(class_id) {
@@ -616,7 +617,7 @@ fn rewrite_instance_call(
         if respell_constructor(args, slots).is_err() {
             refuse_constructor(
                 expr.span,
-                &mut expr.diagnostic,
+                crate::expr::ExprCold::diagnostic_mut(&mut expr.cold),
                 "cannot safely move these keywords into initialize's positional slots without changing Ruby argument binding or evaluation semantics",
                 diagnostics,
             );
@@ -659,7 +660,7 @@ pub(super) fn rewrite_custom_new_call(
     if respell_constructor(args, slots).is_err() {
         refuse_constructor(
             expr.span,
-            &mut expr.diagnostic,
+            crate::expr::ExprCold::diagnostic_mut(&mut expr.cold),
             "cannot safely move these keywords into custom `new` positional slots without changing Ruby argument binding or evaluation semantics",
             diagnostics,
         );

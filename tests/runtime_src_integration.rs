@@ -1093,10 +1093,131 @@ fn every_runtime_method_body_concretely_typed() {
     // in action_controller/cookies.rb) reads and writes JSON values, so its
     // `[]`, `[]=` and `value_of` carry an untyped value by contract, as Rails'
     // encrypted jar answers whatever the cookie holds (+7 on the 784 base).
-    const CEILING: usize = 791;
+    // MEASURED 793 on 2026-10-19: the class-side query fallbacks
+    // (`Model.maximum(:x)` through `all`, connection.rb) answer the column's
+    // value as `Relation#maximum` / `#pick` do, whatever the column holds (+2).
+    // MEASURED 794 on 2026-10-19: a local assigned on some paths through
+    // a branch now reads as the join of them. In
+    // `ActionText::Fragment#flush_pending_removals`, `cursor = finish if
+    // finish > cursor` makes `cursor` Integer | whatever `finish` is, and
+    // `finish = range[1]` is already gradual, so `cursor < @html.length`
+    // is too (+1 in action_text.rb). `cursor` used to read as Integer from
+    // its `0` seed, narrower than the code allows.
+    // MEASURED 798 on 2026-10-19: that site plus the four computed Inertia
+    // prop reads. A computed prop value is whatever the helper put in the
+    // hash. `apply_inertia_prop` reads that untyped value for
+    // `is_a?(InertiaRails::Prop)`, for `is_a?(Proc)`, and again to encode
+    // a plain value (+3 in action_controller/inertia.rb). `inertia_exec`
+    // calls Kernel#instance_exec; the block result is untyped, so that
+    // send stays (+1). Down from 808 on the 793 base: the props hash is
+    // `Hash[String | Symbol, untyped]` (the walk's key reads dropped), the
+    // stored proc and the controller are typed, encoding happens inside
+    // `inertia_exec` (no separate `inertia_prop_json` read), and
+    // `instance_exec` is abstract instead of a `super` wrapper. Session
+    // flag reads are not gradual sites. The four sites stay.
+    // MEASURED 777 on the 793 base: ErrorReporter no longer keeps a second
+    // `deep_dup`. `ActiveSupport.deep_dup` is that walk, including the
+    // non-duplicable leaf (Method, UnboundMethod, Singleton, and
+    // `duplicable?` answering false). The reporter method's 26 sites
+    // leave; the shared method grows by that leaf (22 -> 32).
+    // MEASURED 776 on that base: `query_pairs` reads an untyped Hash
+    // key's `to_s` once. The name uses that String in both arms.
+    // MEASURED 774 on that base: `ParameterFilter#value_for_key` reads
+    // its untyped key's `to_s` once. The dotted path and the regexp
+    // both use that String (776 -> 774).
+    // MEASURED 779 on 2026-10-19 after merging main's 798: the shared
+    // `deep_dup` and the two `to_s` binds still remove the same 19
+    // sites (798 -> 779).
+    // MEASURED 776 on 2026-10-19: `deliver` asks once whether the
+    // event name is a String or a Symbol. `resolve_payload` uses that
+    // bool, so the second pair of `is_a?` reads is gone (779 -> 776).
+    // MEASURED 772 on 2026-10-19: `deep_dup` asks a Hash key's class
+    // once and defers every other key. The second pass no longer
+    // repeats that `is_a?` pair (776 -> 772).
+    // MEASURED 776 on 2026-10-19 after merging main's 772.
+    // `ActiveRecord::Tasks` yields the connection (or nothing) to the
+    // caller's block. A `yield` outside a view is untyped, the same
+    // block-return escape `transaction` carries (+4 in
+    // active_record/tasks.rb: `with_connection`,
+    // `with_temporary_connection`, and `with_temporary_pool`'s yield
+    // plus the begin that answers it).
+    // MEASURED 778 on 2026-10-19: `RecordNotDestroyed#initialize` takes
+    // the record the caller passed, whatever model it is, and forwards
+    // the message through `super`, the same two gradual sites
+    // `RecordNotSaved#initialize` already carries (+2 in
+    // active_record/errors.rb, 776 -> 778).
+    // MEASURED 781 on 2026-10-19: `Associations::Preloader` keeps the
+    // association spec the caller passed (a Symbol, an Array, or a
+    // Hash) and hands it to `Preloading.records`. The parameter, the
+    // ivar, and the read in `call` are that spec (+3 in
+    // active_record/preloading.rb, 778 -> 781).
+    // MEASURED 791 on 2026-10-19: `Type::String` and `Type::Integer`
+    // read the value the caller passed, whatever it is (+10 in
+    // active_record/types.rb, 781 -> 791).
+    // MEASURED 815 on 2026-10-19: `Notifications` fans a callback and a
+    // payload out (+23 in active_support_notifications.rb).
+    // `IsolatedExecutionState` reads the thread-local slot (+1, 791 -> 815).
+    // MEASURED 819 on 2026-10-19: `Continuable#step` answers the block
+    // (+4 in active_job.rb, 815 -> 819).
+    // MEASURED 825 on 2026-10-19: `Notifications.sql` is the statement
+    // `Db.record_query` hands it, and `Event` keeps the span
+    // `instrument` computed so `duration` is milliseconds (+6 in
+    // active_support_notifications.rb, 819 -> 825).
+    // MEASURED 834 on 2026-10-19: the per-thread SQL guard, the
+    // one-argument SQL event, and the blank/unsupported integer cast
+    // read those same gradual values (825 -> 834).
+    // Remeasured 834 on 2026-10-19 after rebasing onto main.
+    // MEASURED 846 on 2026-10-20: `Relation#column_predicate` renders a
+    // Range value as Rails' comparison (#1130). There is no Range type,
+    // so the range, its two ends, and the elements of an Array that may
+    // hold one are read untyped (+12 in active_record/relation.rb,
+    // 834 -> 846).
+    // MEASURED 858 on 2026-10-20: `Relation#cache_key` /
+    // `#cache_version` / `#cache_key_with_version` for jbuilder `cache!`
+    // read the memo Hashes and the windowed rows untyped (+12 over
+    // main's 846, re-measured after rebasing #1034 onto main).
+    // MEASURED 860 on 2026-10-21: the outermost `Base.transaction`
+    // writes the touches `touch_later` deferred before its COMMIT, then
+    // answers the block's value it read from `yield` (+2 in
+    // active_record/connection.rb's `transaction`, 8 -> 10; the
+    // savepoint branch already read its `result` the same way).
+    // `touch_later` and `_flush_deferred_touches_from` type fully.
+    // MEASURED 864 on 2026-10-22: ancestry from source reads a record's
+    // column by name (`read_attribute`, `write_attribute`,
+    // `attribute_in_database`), whose value is whatever that column
+    // holds, and asks a relation for its model's `primary_key` (+4 in
+    // active_record/connection.rb and relation.rb, 860 -> 864).
+    // MEASURED 865 on 2026-10-22: `ActiveSupport::JSON.encode_without_escape`
+    // (Rails' `encode(value, escape: false)`) hands its value to
+    // `jsonable` untyped, as `encode` does (+1 in active_support_ext.rb).
+    // MEASURED 866 on 2026-10-22 (rebased onto 865): `ActiveRecord::Base.unscoped { … }`
+    // returns its block's value, which is untyped (+1 in
+    // active_record/connection.rb).
+    // MEASURED 868 on 2026-10-22 (default_scope static, on 866): `unscoped { … }`
+    // pops the model's table in an `ensure`, so the block's untyped value
+    // is held in a local before it is returned (+2 in
+    // active_record/connection.rb).
+    // MEASURED 870 on 2026-10-23 (merged onto 868): `ActionDispatch::Http::Parameters::
+    // ParseError#initialize` takes the message the caller passed (or
+    // nil) and forwards it through `super`, the same two gradual sites
+    // `RecordNotDestroyed#initialize` carries (+2 in
+    // action_dispatch/exceptions.rb, 868 -> 870).
+    // MEASURED 875 on 2026-10-23 (on 870): `_run_save_callbacks` and its
+    // create/update/destroy/validation twins answer the value of the block
+    // `run_callbacks(:save) { … }` passes, whatever its type, held in a
+    // local around the after hook (+5 in active_record/connection.rb).
+    // MEASURED 876 on 2026-10-24 (on 875): `_halted_by_abort` yields to
+    // the before_* hook it guards and discards its value (+1 in
+    // active_record/connection.rb).
+    // MEASURED 877 on 2026-10-24 (on 876): the typed writers' casts name
+    // `ActiveSupport::Duration` (its seconds, as Rails casts one); the
+    // class is declared by the spinel and CRuby overlays, not by the
+    // ruby-family signatures, so the branch's `to_i`/`to_f` read one
+    // gradual site (+1 in active_support_ext.rb, 876 -> 877).
+    const CEILING: usize = 877;
     assert!(
         total_gradual <= CEILING,
-        "{total_gradual} Ty::Untyped sites exceeds ceiling of {CEILING}",
+        "{total_gradual} Ty::Untyped sites exceeds ceiling of {CEILING}"
     );
 }
 

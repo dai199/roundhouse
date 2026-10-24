@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 # Tep::Server -- accept loop. Single-threaded inside one process;
 # the perf model is "fork N workers, each runs its own Server"
-# (-w workers) using SO_REUSEPORT so the kernel load-balances.
+# (-w workers) sharing the parent's listeners.
 module Tep
   def self.reason(status)
     if status == 200; return "OK"; end
@@ -65,7 +65,13 @@ module Tep
       @app = app
     end
 
-    def run(port, workers, quiet)
+    def run(port, workers, quiet, unix = UnixListener.new(""))
+      sfd = Sock.sphttp_listen_on(Tep::APP.bind_host, port, 0)
+      if sfd < 0
+        unix.close
+        raise IOError, "cannot bind to port " + port.to_s
+      end
+      Sock.sphttp_install_term_handlers
       if !quiet
         puts Tep.display_name + " (" + RUBY_ENGINE +
              ") listening on http://" + (Tep::APP.bind_host.empty? ? "0.0.0.0" : Tep::APP.bind_host) + ":" + port.to_s +
@@ -75,49 +81,51 @@ module Tep
       end
 
       if workers <= 1
-        sfd = Sock.sphttp_listen_on(Tep::APP.bind_host, port, 0)
-        if sfd < 0
-          $stderr.puts Tep.display_name + ": cannot bind to port " +
-                       port.to_s + " (already in use?)"
-          exit(1)
-        end
-        worker_loop(sfd)
-        return
+        worker_loop(sfd, unix.unix_fd)
+        unix.close
+        Sock.sphttp_close(sfd)
+        Sock.sphttp_exit(0)
       end
 
-      # Pre-fork. Each child opens its own SO_REUSEPORT listener so
-      # the kernel load-balances accept() across workers.
+      # Both descriptors are inherited; only the parent owns the pathname.
+      pids = [0]
+      pids.pop
       i = 0
       while i < workers
         pid = Sock.sphttp_fork
         if pid == 0
-          sfd = Sock.sphttp_listen_on(Tep::APP.bind_host, port, 1)
-          if sfd < 0
-            puts Tep.display_name + ": worker " + Sock.sphttp_getpid.to_s +
-                 " bind failed"
-            exit(1)
-          end
-          worker_loop(sfd)
-          exit(0)
+          worker_loop(sfd, unix.unix_fd)
+          unix.close
+          Sock.sphttp_exit(0)
         end
+        pids.push(pid) if pid > 0
         i += 1
       end
-      # Parent: reap forever.
-      loop do
-        gone = Sock.sphttp_wait_any
-        if gone < 0
-          break
-        end
-      end
+      Tep.reap_workers(pids)
+      unix.close
+      Sock.sphttp_close(sfd)
+      Sock.sphttp_exit(0)
+    ensure
+      unix.close
+      Sock.sphttp_close(sfd) if sfd >= 0
     end
 
-    def worker_loop(sfd)
-      loop do
-        client = Sock.sphttp_accept(sfd)
-        if client < 0
-          next
+    def worker_loop(sfd, ufd = -1)
+      Sock.sphttp_set_nonblock(sfd)
+      Sock.sphttp_set_nonblock(ufd) if ufd >= 0
+      while Sock.sphttp_shutdown_requested == 0
+        Sock.sphttp_poll_reset
+        tcp_slot = Sock.sphttp_poll_add(sfd, 1)
+        unix_slot = ufd >= 0 ? Sock.sphttp_poll_add(ufd, 1) : -1
+        Sock.sphttp_poll_run(1000)
+        if Sock.sphttp_poll_ready(tcp_slot) != 0
+          client = Sock.sphttp_accept_nb(sfd)
+          handle_connection(client, "tcp") if client >= 0
         end
-        handle_connection(client)
+        if unix_slot >= 0 && Sock.sphttp_poll_ready(unix_slot) != 0
+          client = Sock.sphttp_accept_nb(ufd)
+          handle_connection(client, "unix") if client >= 0
+        end
       end
     end
 
@@ -127,10 +135,11 @@ module Tep
     # earlier iterations pile up in the global root set inside the
     # surrounding while loop and prevent the young-gen GC from
     # reclaiming the previous request's allocations.
-    def handle_connection(client)
+    def handle_connection(client, transport = "tcp")
+      input = InputBuffer.new
       keep_going = true
       while keep_going
-        keep_going = handle_one(client)
+        keep_going = handle_one(client, input, transport)
       end
       Sock.sphttp_close(client)
     end
@@ -143,29 +152,31 @@ module Tep
     # client fd is blocking, so each recv parks the worker until bytes
     # arrive — no scheduler. Replaces the C sphttp_read_request +
     # request_buf (sphttp.c retired — matz/spinel#1466). `+` is binary-safe.
-    def read_request_blocking(client)
-      buf = +""
-      while buf.length < 65535
-        chunk = Sock.sp_net_recv_some(client, 4096)
+    def read_request_blocking(client, input = InputBuffer.new)
+      buf = input.take_pending_input
+      return buf if buf.include?("\r\n\r\n")
+      while buf.bytesize < 65535
+        chunk = Sock.sp_net_recv_some(client, [4096, 65535 - buf.bytesize].min).b
         if chunk.length == 0
           return ""
         end
         buf = buf + chunk
-        if buf.length >= 4 && buf.include?("\r\n\r\n")
+        if buf.bytesize >= 4 && buf.include?("\r\n\r\n")
           return buf
         end
       end
       ""
     end
 
-    def handle_one(client)
-      blob = read_request_blocking(client)
+    def handle_one(client, input = InputBuffer.new, transport = "tcp")
+      blob = read_request_blocking(client, input)
       return false if blob.length == 0
-      req = Parser.parse(blob)
+      req = Parser.parse(blob, input)
       if req == nil
         send_simple(client, 400, "bad request")
         return false
       end
+      req.listener_transport = transport
       # Before the drain, which is what held the bytes (Request#body_refusal).
       refusal = req.body_refusal(Tep.max_body_bytes)
       if refusal != 0
@@ -195,9 +206,9 @@ module Tep
       end
       keep_alive = req.keep_alive? && !res.halted_close?
       write_response(client, req, res, keep_alive)
-      keep_alive
     end
 
+    # Return the keep-alive decision actually sent by the writer.
     def write_response(client, req, res, keep_alive)
       if res.streaming
         # Chunked-encoding stream. Send headers immediately, hand a
@@ -214,7 +225,7 @@ module Tep
         out = Stream.new(client)
         res.streamer.pump(out)
         Sock.sphttp_write_chunk_end(client)
-        return
+        return false
       end
 
       if res.file_path.length > 0
@@ -222,7 +233,7 @@ module Tep
         sz = Sock.sphttp_filesize(res.file_path)
         if sz < 0
           send_simple(client, 404, "file not found")
-          return
+          return false
         end
         res.headers["Content-Length"] = sz.to_s
         if !res.headers.key?("Content-Type")
@@ -236,7 +247,7 @@ module Tep
         head = build_head(req, res)
         Sock.sphttp_write_str(client, head)
         Sock.sphttp_sendfile(client, res.file_path) unless req.verb == "HEAD"
-        return
+        return keep_alive
       end
 
       if res.body.length > 0 && !res.headers.key?("Content-Type")
@@ -261,6 +272,7 @@ module Tep
       if res.body.bytesize > 0 && req.verb != "HEAD"
         Sock.sphttp_write_bytes(client, res.body, res.body.bytesize)
       end
+      keep_alive
     end
 
     def build_head(req, res)

@@ -18,18 +18,23 @@
 mod alba;
 mod unreachable_views;
 mod uncalled_helper_copies;
+mod written_names;
 mod pagy;
 mod graphql_ruby;
 mod guarded_include;
+mod lock_versions;
 pub(crate) mod class_attribute;
 mod class_configuration;
 mod dry_initializer;
 mod dry_struct;
 mod dry_types;
+mod oj;
+mod source_gems;
 mod dry_monads;
 mod dry_validation;
 mod representable;
 mod action_cable_config;
+mod session_config;
 pub(crate) mod database_yml;
 mod public_file_server_config;
 pub mod allow_browser;
@@ -48,10 +53,12 @@ pub mod generated_helpers;
 pub mod jbuilder;
 pub mod library_class;
 pub mod channel_callbacks;
+mod active_model_attributes;
 pub mod current_attributes;
 pub mod delegate;
 mod acts_as_votable;
 mod discard;
+mod model_callbacks;
 mod model_delegate;
 pub mod thread_mattr;
 pub mod model;
@@ -60,8 +67,12 @@ mod app_extension_calls;
 mod class_macros;
 mod column_accessors;
 mod model_macros;
+mod referenced_carriers;
+mod extend_splice;
 pub mod on_load_reopen;
 pub mod prism;
+pub(crate) mod prism_api;
+mod propshaft;
 pub mod rbi;
 pub mod rate_limit;
 pub mod inertia;
@@ -79,12 +90,18 @@ pub mod sql_functions;
 pub mod structure_sql;
 pub mod survey;
 pub mod test;
+pub(crate) mod rake_tasks;
 pub mod util;
 pub mod view;
 pub mod vite;
 mod visibility;
 
 pub use app::{ingest_app, ingest_app_from_tree, ingest_app_with_vfs};
+
+/// The construct an ActiveRecord class outside app/models is reported
+/// under (`app::report_unmodelled_records`): the CLI keys its per-target
+/// handling on it (#1278).
+pub const UNMODELLED_RECORD: &str = "ActiveRecord model outside app/models";
 pub use controller::ingest_controller;
 pub use expr::ingest_expr;
 pub use fixture::ingest_fixture_file;

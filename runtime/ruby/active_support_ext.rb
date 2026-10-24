@@ -68,6 +68,13 @@ module ActiveSupport
       JsonBuilder.escape_html_entities(::JSON.generate(ActiveSupport::JSON.jsonable(value)))
     end
 
+    # `encode(value, escape: false)`, which `lower::symbolize_keys`
+    # routes here: the same document without the HTML-entity escaping,
+    # for text no page embeds (a digest's input).
+    def self.encode_without_escape(value)
+      ::JSON.generate(ActiveSupport::JSON.jsonable(value))
+    end
+
     def self.decode(text)
       ::JSON.parse(text)
     end
@@ -96,7 +103,9 @@ module ActiveSupport
     # taken to be UTC (Rails writes `+00:00` for a non-UTC zone at offset
     # zero, such as London in winter).
     def self.time_json(t)
-      zone = t.zone == "UTC" || (t.utc_offset == 0 && ActiveSupport::JSON.utc_zone?) ? "Z" : t.strftime("%:z")
+      # Concatenate onto a fresh local: Spinel refuses a shared String
+      # written from a conditional into the format append below.
+      zone = (t.zone == "UTC" || (t.utc_offset == 0 && ActiveSupport::JSON.utc_zone?) ? "Z" : t.strftime("%:z")) + ""
       t.strftime("%Y-%m-%dT%H:%M:%S") + format(".%03d", t.usec / 1000) + zone
     end
 
@@ -125,21 +134,47 @@ module ActiveSupport
     end
   end
 
-  # ActiveSupport's `deep_dup` (core_ext/object/deep_dup.rb), for a typed
-  # Hash or Array receiver (`lower::symbolize_keys` routes the call here).
-  # A Hash copies each value and, for keys that are neither String nor
-  # Symbol, the key too — re-inserted after the String/Symbol ones, as
-  # Rails' delete-and-store does. An Array copies each element. Any other
-  # value is its `dup` (an Integer's, nil's or a Symbol's is itself).
+  # ActiveSupport's `deep_dup` (core_ext/object/deep_dup.rb). One walk,
+  # also what `ErrorReporter` hands each subscriber. A Hash is copied
+  # into a fresh Hash: String and Symbol keys first, every other key
+  # after them, which is where Rails' delete-and-store lands. An Array
+  # copies each element. A Method, an UnboundMethod, a Singleton, or
+  # anything that answers `duplicable?` with false is itself; anything
+  # else is its `dup` (an Integer's, nil's or a Symbol's is itself).
+  # `lower::symbolize_keys` routes a typed Hash or Array receiver here.
   def self.deep_dup(value)
     case value
     when Array then value.map { |item| ActiveSupport.deep_dup(item) }
     when Hash
+      # A fresh Hash, not `dup`: String and Symbol keys first, every
+      # other key after them. The key class is read once; the second
+      # pass used to ask it again.
       out = {}
-      value.each { |key, item| out[key] = ActiveSupport.deep_dup(item) if key.is_a?(String) || key.is_a?(Symbol) }
-      value.each { |key, item| out[ActiveSupport.deep_dup(key)] = ActiveSupport.deep_dup(item) unless key.is_a?(String) || key.is_a?(Symbol) }
+      deferred_keys = []
+      deferred_items = []
+      value.each do |key, item|
+        if key.is_a?(String) || key.is_a?(Symbol)
+          out[key] = ActiveSupport.deep_dup(item)
+        else
+          deferred_keys << key
+          deferred_items << item
+        end
+      end
+      i = 0
+      while i < deferred_keys.length
+        out[ActiveSupport.deep_dup(deferred_keys[i])] = ActiveSupport.deep_dup(deferred_items[i])
+        i += 1
+      end
       out
-    else value.dup
+    else
+      # Not duplicable? (core_ext/object/duplicable.rb): the value itself.
+      if value.is_a?(Method) || value.is_a?(UnboundMethod) || (defined?(::Singleton) && value.is_a?(::Singleton))
+        value
+      elsif value.respond_to?(:duplicable?) && !value.duplicable?
+        value
+      else
+        value.dup
+      end
     end
   end
 
@@ -209,7 +244,9 @@ module ActiveSupport
     hash.each do |key, item|
       empty_container = (item.is_a?(Hash) && item.empty?) || (item.is_a?(Array) && item.empty?)
       next if empty_container
-      name = namespace.empty? ? key.to_s : "#{namespace}[#{key.to_s}]"
+      # One `to_s` of the untyped key. The ceiling counts each read.
+      key_text = key.to_s
+      name = namespace.empty? ? key_text : "#{namespace}[#{key_text}]"
       pairs << query_value(name, item)
     end
     pairs = pairs.sort unless namespace.include?("[]")
@@ -449,6 +486,24 @@ module ActiveSupport
     out
   end
 
+  # AS `String#first(limit = 1)` / `String#last(limit = 1)`
+  # (core_ext/string/access.rb): the leading or trailing `limit`
+  # characters, the whole String when it is shorter, and ArgumentError
+  # for a negative limit. A String reopen the transpiled runtimes cannot
+  # host, as `squish` below. Campfire binds its transfer link to
+  # `password_salt&.last(10)`.
+  def self.string_first(text, limit)
+    head = text[0, limit]
+    raise ArgumentError, "negative limit" if head.nil?
+    head
+  end
+
+  def self.string_last(text, limit)
+    tail = text[[text.length - limit, 0].max, limit]
+    raise ArgumentError, "negative limit" if tail.nil?
+    tail
+  end
+
   # Rails' destructive form always returns the same receiver, including
   # when its contents were already squished.
   def self.squish!(text)
@@ -563,11 +618,251 @@ module ActiveSupport
   end
 
   # Not `value == false || value == 0`: ActiveModel compares its FALSE_VALUES by string too, so :off and "0" answer false.
+  # Only the String "" is nil, as `cast_value`'s `value == ""`: `:""`
+  # is not in FALSE_VALUES, so it is true.
   def self.cast_boolean(value)
     return nil if value.nil?
+    return nil if value == ""
     text = value.to_s
-    return nil if text == ""
     !%w[0 f F false FALSE off OFF].include?(text)
+  end
+
+  # ActiveModel::Type::String#cast_value. `true`/`false` are the frozen
+  # `"t"`/`"f"`; a String is copied so a later mutation is not the
+  # attribute; anything else is `to_s`.
+  def self.cast_string(value)
+    if value.nil?
+      nil
+    elsif value == true
+      "t".freeze
+    elsif value == false
+      "f".freeze
+    elsif value.is_a?(String)
+      value.dup
+    else
+      value.to_s
+    end
+  end
+
+  # ActiveModel::Type::Integer, through `Helpers::Numeric#cast`. A blank
+  # string is nil. A Float that is not finite is nil (`to_i` raises
+  # `FloatDomainError`). Any other string is `to_i` of its first 16
+  # bytes, Rails' `byteslice(0, limit * 4)` at the default 4-byte limit.
+  # A value of another class is what `value.presence` and then
+  # `value.to_i rescue nil` answer: a Time, a Duration (its seconds) or another Numeric (a
+  # Rational) its `to_i`, anything else nil (a Symbol, an Array, a Hash
+  # and an Object have no `to_i`). Each class is named rather than asked
+  # with `respond_to?`, so every branch is typed.
+  def self.cast_integer(value)
+    if value.nil?
+      nil
+    elsif value == true
+      1
+    elsif value == false
+      0
+    elsif value.is_a?(Integer)
+      value
+    elsif value.is_a?(Float)
+      # Not `finite?`, which not every target's Float answers. NaN and
+      # the infinities are the floats for which `v - v` is not 0.0.
+      if value - value != 0.0
+        nil
+      else
+        value.to_i
+      end
+    elsif value.is_a?(String)
+      ActiveSupport.integer_from_string(value)
+    elsif value.is_a?(Time)
+      value.to_i
+    elsif value.is_a?(ActiveSupport::Duration)
+      value.to_i
+    elsif value.is_a?(Numeric)
+      value.to_i
+    else
+      nil
+    end
+  end
+
+  # `Helpers::Numeric#cast`'s `value.presence` for a value that is not
+  # nil, a boolean, a number or a String: `Object#blank?`, which is
+  # `empty?` for the classes that answer it (`[]`, `{}`, `:""`, `Set[]`) and
+  # false for any other object.
+  def self.numeric_blank?(value)
+    if value.is_a?(Array)
+      value.empty?
+    elsif value.is_a?(Hash)
+      value.empty?
+    elsif value.is_a?(Symbol)
+      value.empty?
+    elsif value.is_a?(Set)
+      value.empty?
+    else
+      false
+    end
+  end
+
+  # ActiveModel::Type::Float, through `Helpers::Numeric#cast` (a decimal
+  # column is a Float here, so it casts the same, where Rails answers a
+  # BigDecimal of the same value). A blank string is nil; `true`/`false`
+  # are 1.0/0.0; `"Infinity"`, `"-Infinity"` and `"NaN"` are those floats
+  # (`Type::Float#cast_value`); any other string is `to_f`. A value of
+  # another class is nil when blank (`[]`, `{}`, `:""`), a Time or
+  # another Numeric (a Rational) or a Duration its `to_f`; Rails does not rescue that
+  # `to_f`, so anything else (a Symbol, an Array, a Hash, an Object)
+  # raises the NoMethodError it raises there.
+  def self.cast_float(value)
+    if value.nil?
+      nil
+    elsif value == true
+      1.0
+    elsif value == false
+      0.0
+    elsif value.is_a?(Float)
+      value
+    elsif value.is_a?(Integer)
+      value.to_f
+    elsif value.is_a?(String)
+      ActiveSupport.float_from_string(value)
+    elsif ActiveSupport.numeric_blank?(value)
+      nil
+    elsif value.is_a?(Time)
+      value.to_f
+    elsif value.is_a?(ActiveSupport::Duration)
+      value.to_f
+    elsif value.is_a?(Numeric)
+      value.to_f
+    else
+      raise NoMethodError, "undefined method 'to_f' for an instance of #{value.class}"
+    end
+  end
+
+  # ActiveModel::Type::Decimal, as a Float (a decimal column is a Float
+  # here). nil, booleans, numbers and Strings cast as `cast_float` does.
+  # Another value is nil when blank; another Numeric (a Rational) is its
+  # value; anything else is what its `to_s` reads (`cast_value(value.to_s)`),
+  # so a Symbol, an Array, a Hash or an Object is 0.0 and `:"5"` is 5.0.
+  def self.cast_decimal(value)
+    if value.nil? || value == true || value == false || value.is_a?(Integer) || value.is_a?(Float) || value.is_a?(String)
+      ActiveSupport.cast_float(value)
+    elsif ActiveSupport.numeric_blank?(value)
+      nil
+    elsif value.is_a?(ActiveSupport::Duration)
+      value.to_f
+    elsif value.is_a?(Numeric)
+      value.to_f
+    else
+      ActiveSupport.float_from_string(value.to_s)
+    end
+  end
+
+  # The number ActiveModel 8.1.4's NumericalityValidator checks, or nil
+  # when it is "not a number". `raw` is the value the user assigned
+  # (`<attr>_before_type_cast`), nil when the attribute did not come from
+  # the user, in which case the cast `value` is read (`raw_value ||
+  # value`). Then `parse_as_number`: a Numeric as it is; a String of
+  # digits (`/\A[+-]?\d+\z/`) its Integer; a hex prefix not a number;
+  # anything else what `Kernel.Float` reads, or not a number where it
+  # raises. `Kernel.Float`'s grammar is the regexp, since not every
+  # target has `Float()`.
+  def self.numericality_number(raw, value)
+    v = raw.nil? || raw == false ? value : raw
+    return nil if v.nil?
+    return v if v.is_a?(Integer) || v.is_a?(Float)
+    text = v.to_s
+    return text.to_i if text.match?(/\A[+-]?\d+\z/)
+    return nil if text.match?(/\A[+-]?0[xX]/)
+    return nil unless text.match?(/\A[[:space:]]*[+-]?(?:\d+(?:_\d+)*(?:\.(?:\d+(?:_\d+)*)?)?|\.\d+(?:_\d+)*)(?:[eE][+-]?\d+(?:_\d+)*)?[[:space:]]*\z/)
+    text.to_f
+  end
+
+  # The String half of `cast_float`: the blank scan `integer_from_string`
+  # makes, then Rails' three named values, then `to_f`. The named values
+  # are divisions rather than `Float::INFINITY`/`NAN`, which not every
+  # target defines.
+  def self.float_from_string(value)
+    i = 0
+    n = value.length
+    blank = true
+    while i < n
+      blank = false unless value[i].match?(/[[:space:]]/)
+      i = n unless blank
+      i = i + 1
+    end
+    return nil if blank
+    zero = 0.0
+    return 1.0 / zero if value == "Infinity"
+    return -1.0 / zero if value == "-Infinity"
+    return zero / zero if value == "NaN"
+    value.to_f
+  end
+
+  # `String#blank?` is `/\A[[:space:]]*\z/`, which raises ArgumentError
+  # on invalid UTF-8 — the integer writer does, in `presence`, before
+  # it slices. One character at a time, the same scan `squish` lowers:
+  # a counter loop, no `break` or `next` (those stay a Ruby loop, and
+  # TypeScript turns `next` into `return`). `value[i]` on a multibyte
+  # string walks from the start, so the loop stops at the first
+  # character that is not space by moving `i` to the end, then taking
+  # the required `i = i + 1` step. A string that is not blank is `to_i`
+  # of its first 16 bytes. The first 16 characters are enough: `to_i`
+  # reads only an ASCII prefix, and 16 characters are at least 16 bytes.
+  def self.integer_from_string(value)
+    i = 0
+    n = value.length
+    blank = true
+    while i < n
+      blank = false unless value[i].match?(/[[:space:]]/)
+      i = n unless blank
+      i = i + 1
+    end
+    return nil if blank
+    prefix = n > 16 ? value[0, 16] : value
+    ActiveSupport.integer_from_bytes(prefix.bytes)
+  end
+
+  # `byteslice(0, 16).to_i`. Strict targets lower `String#bytes`, not
+  # `byteslice`. For a string `blank?` accepted, the two slices' `to_i`
+  # are the same integer: `to_i` reads only an ASCII prefix, and a
+  # non-ASCII byte stops it. Underscores between digits count, as
+  # Ruby's `to_i` does (`"1_0"` is 10, `"1__0"` is 1). `phase` 3 ignores
+  # the rest of the window so the loop stays a counter (`i = i + 1`).
+  def self.integer_from_bytes(raw)
+    limit = raw.length
+    limit = 16 if limit > 16
+    i = 0
+    phase = 0
+    sign = 1
+    n = 0
+    digits = 0
+    while i < limit
+      b = raw[i]
+      b = -1 if b.nil?
+      if phase == 0
+        if b == 43 || b == 45
+          sign = -1 if b == 45
+          phase = 2
+        elsif b >= 48 && b <= 57
+          n = n * 10 + (b - 48)
+          digits = digits + 1
+          phase = 2
+        elsif b != 32 && b != 9 && b != 10 && b != 11 && b != 12 && b != 13
+          phase = 3
+        end
+      elsif phase == 2
+        if b == 95
+          nxt = raw[i + 1]
+          nxt = -1 if nxt.nil?
+          phase = 3 if digits == 0 || nxt < 48 || nxt > 57
+        elsif b >= 48 && b <= 57
+          n = n * 10 + (b - 48)
+          digits = digits + 1
+        else
+          phase = 3
+        end
+      end
+      i = i + 1
+    end
+    n * sign
   end
 
   # AS `Array#to_sentence`: "", "a", "a and b", "a, b, and c" with the
@@ -832,7 +1127,7 @@ module ActiveSupport
     "Bucharest" => "Europe/Bucharest",
     "Cairo" => "Africa/Cairo",
     "Helsinki" => "Europe/Helsinki",
-    "Kyiv" => "Europe/Kiev",
+    "Kyiv" => "Europe/Kyiv",
     "Riga" => "Europe/Riga",
     "Sofia" => "Europe/Sofia",
     "Tallinn" => "Europe/Tallinn",
@@ -873,7 +1168,7 @@ module ActiveSupport
     "Almaty" => "Asia/Almaty",
     "Astana" => "Asia/Almaty",
     "Novosibirsk" => "Asia/Novosibirsk",
-    "Rangoon" => "Asia/Rangoon",
+    "Rangoon" => "Asia/Yangon",
     "Bangkok" => "Asia/Bangkok",
     "Hanoi" => "Asia/Bangkok",
     "Jakarta" => "Asia/Jakarta",
@@ -1206,10 +1501,17 @@ module ActiveSupport
       end
     end
 
+    # Rails' `zones_map` (`activesupport/lib/active_support/values/time_zone.rb`)
+    # builds this by calling `self[name]` per mapped name and keeping only
+    # the ones that resolve; `[]` itself rescues `TZInfo::InvalidTimezoneIdentifier`
+    # and returns nil for the rest. `lookup` is our spelling of that `[]`.
+    # A host missing a legacy zone file (no `tzdata-legacy`) then just has
+    # fewer zones, not a raise.
     def self.all
       zones = []
       ActiveSupport.rails_zone_names.each do |zone_name|
-        zones << TimeZone.new(zone_name, ActiveSupport.find_zone!(zone_name))
+        zone = lookup(zone_name)
+        zones << zone unless zone.nil?
       end
       # Not `sort { |a, b| … }`: a block's parameters do not type on every target, and 152 zones sort cheaply in place.
       i = 1
