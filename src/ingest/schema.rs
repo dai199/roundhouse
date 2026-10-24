@@ -947,6 +947,8 @@ fn table_from_create_table(
                 generated: None,
                 generated_text_compatible: None,
                 generated_int4_compatible: None,
+                array: false,
+                array_stored: false,
             }),
             Some(t) => column_with_type(t, id_name.clone(), &opts, &table_name, file),
         };
@@ -1058,6 +1060,8 @@ fn virtual_table_from_call(call: &ruby_prism::CallNode<'_>) -> Option<(Symbol, T
             generated: None,
             generated_text_compatible: None,
             generated_int4_compatible: None,
+            array: false,
+            array_stored: false,
         })
         .collect();
     Some((
@@ -1146,20 +1150,24 @@ fn view_columns_from_sql(sql: &str, tables: &IndexMap<Symbol, Table>) -> Vec<Col
         let item_start = i < 2
             || toks[i - 2].eq_ignore_ascii_case("select")
             || toks[i - 2].ends_with(',');
+        // The source column's type and `array:` both: the view re-exposes it.
         let resolved = if item_start {
-            parse_col_ref(toks[i - 1]).and_then(|(t, c)| lookup_column_type(tables, &t, &c))
+            parse_col_ref(toks[i - 1]).and_then(|(t, c)| lookup_column(tables, &t, &c))
         } else {
             None
         };
+        let array = resolved.as_ref().is_some_and(|(_, array)| *array);
         columns.push(Column {
             name: Symbol::from(alias),
-            col_type: resolved.unwrap_or_else(|| view_column_type(alias)),
+            col_type: resolved.map(|(col_type, _)| col_type).unwrap_or_else(|| view_column_type(alias)),
             nullable: true,
             default: None,
             primary_key: false,
             generated: None,
             generated_text_compatible: None,
             generated_int4_compatible: None,
+            array,
+            array_stored: false,
         });
     }
     columns
@@ -1188,17 +1196,17 @@ fn parse_col_ref(tok: &str) -> Option<(String, String)> {
 }
 
 /// Look up a column's declared type in the already-parsed schema.
-fn lookup_column_type(
+fn lookup_column(
     tables: &IndexMap<Symbol, Table>,
     table: &str,
     column: &str,
-) -> Option<ColumnType> {
+) -> Option<(ColumnType, bool)> {
     tables
         .get(&Symbol::from(table))?
         .columns
         .iter()
         .find(|c| c.name.as_str() == column)
-        .map(|c| c.col_type.clone())
+        .map(|c| (c.col_type.clone(), c.array))
 }
 
 /// Fallback column type for a computed view column (no single source
@@ -1227,6 +1235,8 @@ fn timestamp_columns() -> [Column; 2] {
         generated: None,
         generated_text_compatible: None,
         generated_int4_compatible: None,
+        array: false,
+        array_stored: false,
     };
     [col("created_at"), col("updated_at")]
 }
@@ -1244,6 +1254,8 @@ fn reference_column(name: &str) -> Column {
         generated: None,
         generated_text_compatible: None,
         generated_int4_compatible: None,
+        array: false,
+        array_stored: false,
     }
 }
 
@@ -1256,6 +1268,8 @@ struct ColumnOpts {
     limit: Option<u32>,
     /// A present array option is non-scalar unless explicitly false or nil.
     array: bool,
+    /// `default: []`, which `default_value` reads as no default.
+    empty_array_default: bool,
 }
 
 // Not `string_value` alone: schema.rb dumps an integer, float or boolean default unquoted (`default: 0`, `default: true`).
@@ -1280,7 +1294,10 @@ fn parse_column_opts<'pr>(nodes: impl Iterator<Item = &'pr Node<'pr>>) -> Column
             let value = &assoc.value();
             match key.as_str() {
                 "null" => opts.nullable = bool_value(value),
-                "default" => opts.default = default_value(value),
+                "default" => {
+                    opts.default = default_value(value);
+                    opts.empty_array_default = value.as_array_node().is_some_and(|a| a.elements().iter().next().is_none());
+                }
                 "limit" => {
                     if let Some(n) = integer_value(value) {
                         if n >= 0 {
@@ -1474,8 +1491,8 @@ fn generated_column_from_options(
 /// `ColumnType`. The Postgres-only types map to their SQLite storage:
 /// `uuid`, `json`, and `jsonb` retain distinct schema variants even when
 /// their shared SQLite/runtime representation uses text;
-/// `citext` is text; `timestamptz` is a datetime; the network types
-/// and a PG `enum` are strings. `timestamp` is Rails' own alias for
+/// `citext` is text; `timestamptz` is a datetime; `interval` keeps its
+/// own variant; the network types and a PG `enum` are strings. `timestamp` is Rails' own alias for
 /// `datetime` (`TableDefinition#timestamp`), which a MySQL-backed
 /// app's `schema.rb` dumps for a `TIMESTAMP` column — lobsters'
 /// `story_texts.created_at`. A type not listed is an error, not a
@@ -1512,6 +1529,9 @@ fn column_with_type(
         "json" => ColumnType::Json,
         "jsonb" => ColumnType::Jsonb,
         "uuid" => ColumnType::Uuid,
+        // Rails' PostgreSQL adapter: `t.interval` / `t.column :span, :interval`.
+        // `precision:` is the typmod Rails may dump; the value is still one interval.
+        "interval" => ColumnType::Interval,
         "references" | "belongs_to" => {
             ColumnType::Reference { table: TableRef(Symbol::from(col_name.as_str())) }
         }
@@ -1532,7 +1552,7 @@ fn column_with_type(
     // Rails `string`/`text` columns.
     let generated_text_compatible = (opts.array || matches!(
         type_name,
-        "inet" | "cidr" | "macaddr" | "enum" | "citext"
+        "inet" | "cidr" | "macaddr" | "enum" | "citext" | "interval"
     ) || (type_name == "text" && opts.limit.is_some()))
     .then_some(false);
     // Rails' PostgreSQL adapter maps integer limits 1 and 2 to smallint,
@@ -1554,11 +1574,15 @@ fn column_with_type(
         name: Symbol::from(col_name),
         col_type,
         nullable: opts.nullable.unwrap_or(true),
-        default: opts.default.clone(),
+        // An array column's `default: []` is kept as `[]`; a target that
+        // stores the Array reads it (`Column::stored_default`).
+        default: if opts.array && opts.empty_array_default { Some("[]".into()) } else { opts.default.clone() },
         primary_key: false,
         generated: None,
         generated_text_compatible,
         generated_int4_compatible,
+        array: opts.array,
+        array_stored: false,
     })
 }
 

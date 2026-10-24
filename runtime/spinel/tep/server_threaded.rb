@@ -67,11 +67,12 @@ module Tep
         @app = app
       end
 
-      def run(port, workers, quiet)
+      def run(port, workers, quiet, unix = UnixListener.new(""))
         sfd = Sock.sphttp_listen_on(Tep::APP.bind_host, port, workers > 1 ? 1 : 0)
         if sfd < 0
           $stderr.puts Tep.display_name + ": cannot bind to port " +
                        port.to_s + " (already in use?)"
+          unix.close
           exit(1)
         end
         if !quiet
@@ -92,26 +93,25 @@ module Tep
         # of its own. One process is the shape the binary is measured
         # in; the option stays for the operator who wants processes.
         if workers > 1
+          pids = [0]
+          pids.pop
           i = 0
           while i < workers
             pid = Sock.sphttp_fork
             if pid == 0
-              Tep::Server::Threaded.run_worker(sfd)
+              Tep::Server::Threaded.run_worker(sfd, unix.unix_fd)
+              unix.close
               Sock.sphttp_exit(0)   # same reason as the single-process exit below
             end
+            pids.push(pid) if pid > 0
             i += 1
           end
-          loop do
-            gone = Sock.sphttp_wait_any
-            if gone < 0
-              break
-            end
-          end
+          Tep.reap_workers(pids)
           if Sock.sphttp_shutdown_requested != 0
             Tep.on_shutdown
           end
         else
-          Tep::Server::Threaded.run_worker(sfd)
+          Tep::Server::Threaded.run_worker(sfd, unix.unix_fd)
           if Sock.sphttp_shutdown_requested != 0
             Tep.on_shutdown
           end
@@ -120,9 +120,16 @@ module Tep
           # parked on sockets that may never speak again (a keep-alive
           # waits 30s, an idle WebSocket 300s). A server asked to stop
           # stops.
+          unix.close
+          Sock.sphttp_close(sfd)
           Sock.sphttp_exit(0)
         end
-        0
+        unix.close
+        Sock.sphttp_close(sfd)
+        Sock.sphttp_exit(0)
+      ensure
+        unix.close
+        Sock.sphttp_close(sfd) if sfd >= 0
       end
 
       # The accept loop, on the calling thread. A TIMED wait on the listen
@@ -132,7 +139,18 @@ module Tep
       # woken to read it -- the first threaded build ignored SIGTERM until
       # the next connection came in. Then a non-blocking accept, which
       # answers -1 for a spurious wake and is retried.
-      def self.run_worker(sfd)
+      def self.run_worker(sfd, ufd = -1)
+        if ufd >= 0
+          unix_accept = Thread.new(ufd) { |fd| Tep::Server::Threaded.accept_loop(fd, "unix") }
+          Tep::Server::Threaded.accept_loop(sfd, "tcp")
+          unix_accept.join
+        else
+          Tep::Server::Threaded.accept_loop(sfd, "tcp")
+        end
+        0
+      end
+
+      def self.accept_loop(sfd, transport)
         Sock.sphttp_set_nonblock(sfd)
         lio = IO.for_fd(sfd, autoclose: false)
         while true
@@ -149,7 +167,7 @@ module Tep
           end
           Sock.sphttp_set_nonblock(client)
           Thread.new(client) do |c|
-            Tep::Server::Threaded.handle_connection(c)
+            Tep::Server::Threaded.handle_connection(c, transport)
           end
         end
         lio.close
@@ -173,7 +191,7 @@ module Tep
       # The wrapper is taken outside the `ensure` so `io` stays an IO,
       # not an IO-or-nil, in handle_one's signature; a failed dup closes
       # the fd itself.
-      def self.handle_connection(client)
+      def self.handle_connection(client, transport = "tcp")
         begin
           io = IO.for_fd(client, autoclose: false)
         rescue StandardError
@@ -181,9 +199,10 @@ module Tep
           raise
         end
         begin
+          input = InputBuffer.new
           keep_going = true
           while keep_going
-            keep_going = Tep::Server::Threaded.handle_one(client, io)
+            keep_going = Tep::Server::Threaded.handle_one(client, io, input, transport)
           end
         ensure
           io.close
@@ -194,16 +213,17 @@ module Tep
 
       # Process exactly one request on `client`. Returns true to keep the
       # connection open for the next keep-alive request, false to close.
-      def self.handle_one(client, io)
-        blob = Tep::Server::Threaded.read_request_blob(client, io, KEEPALIVE_TIMEOUT)
+      def self.handle_one(client, io, input = InputBuffer.new, transport = "tcp")
+        blob = Tep::Server::Threaded.read_request_blob(client, io, KEEPALIVE_TIMEOUT, input)
         if blob.length == 0
           return false
         end
-        req = Parser.parse(blob)
+        req = Parser.parse(blob, input)
         if req == nil
           Tep::Server::Threaded.send_simple(client, 400, "bad request")
           return false
         end
+        req.listener_transport = transport
 
         # Before the drain, which is what held the bytes (Request#body_refusal).
         refusal = req.body_refusal(Tep.max_body_bytes)
@@ -230,20 +250,19 @@ module Tep
           return false
         end
 
-        # Streaming responses use chunked Connection: close (same
-        # simplification as the prefork server).
-        keep_alive = req.keep_alive? && !res.halted_close? && !res.streaming
-        Tep::Server::Threaded.write_response(client, io, req, res, keep_alive)
-        keep_alive
+        # The writer returns the keep-alive decision it actually sends.
+        keep_alive = req.keep_alive? && !res.halted_close?
+        Tep::Server::Threaded.write_response(client, io, req, res, keep_alive, input)
       end
 
       # Request reader. Returns the accumulated blob once "\r\n\r\n" is
       # seen, or "" on timeout / EOF / oversize. The timed wait parks the
       # thread; a peer that closes wakes it (EOF reads as zero bytes).
-      def self.read_request_blob(fd, io, timeout_seconds)
-        buf = +""
+      def self.read_request_blob(fd, io, timeout_seconds, input = InputBuffer.new)
+        buf = input.take_pending_input
+        return buf if buf.include?("\r\n\r\n")
         deadline = Time.now.to_i + timeout_seconds
-        while buf.length < MAX_REQUEST_BYTES
+        while buf.bytesize < MAX_REQUEST_BYTES
           remaining = deadline - Time.now.to_i
           if remaining <= 0
             return ""
@@ -252,12 +271,12 @@ module Tep
           if ready.nil?
             return ""
           end
-          chunk = Sock.sphttp_recv_some(fd, 4096)
+          chunk = Sock.sphttp_recv_some(fd, [4096, MAX_REQUEST_BYTES - buf.bytesize].min).b
           if chunk.length == 0
             return ""
           end
           buf << chunk
-          if buf.length >= 4 && buf.include?("\r\n\r\n")
+          if buf.bytesize >= 4 && buf.include?("\r\n\r\n")
             return buf
           end
         end
@@ -265,7 +284,7 @@ module Tep
       end
 
       # Body-shape mirror of Tep::Server#write_response.
-      def self.write_response(client, io, req, res, keep_alive)
+      def self.write_response(client, io, req, res, keep_alive, input = InputBuffer.new)
         # WebSocket upgrade branch. Set by res.start_websocket in the
         # user's handler after a successful Handshake.check. Writes the
         # 101 Switching Protocols head, then hands the fd (and this
@@ -284,12 +303,14 @@ module Tep
           # `ensure`, because handle_connection now closes the fd on the
           # way out of a raise too, and an unretired driver would write
           # into whatever socket reuses that number.
+          # Surplus after the upgrade headers is the first WebSocket
+          # frame when it shared the request's recv.
           begin
-            conn.run
+            conn.run(input.take_pending_input)
           ensure
             res.ws_driver.retire
           end
-          return 0
+          return false
         end
 
         # Streaming branch -- chunked, Connection: close.
@@ -306,7 +327,7 @@ module Tep
           out = Tep::Stream.new(client)
           res.streamer.pump(out)
           Sock.sphttp_write_chunk_end(client)
-          return 0
+          return false
         end
 
         # Default Content-Type for inline-body responses.
@@ -324,6 +345,10 @@ module Tep
         end
         if res.file_path.length > 0
           fs = Sock.sphttp_filesize(res.file_path)
+          if fs < 0
+            Tep::Server::Threaded.send_simple(client, 404, "file not found")
+            return false
+          end
           head << "Content-Length: " + fs.to_s + "\r\n\r\n"
           Sock.sphttp_write_str(client, head)
           Sock.sphttp_sendfile(client, res.file_path) unless req.verb == "HEAD"
@@ -339,7 +364,7 @@ module Tep
             Sock.sphttp_write_bytes(client, res.body, res.body.bytesize)
           end
         end
-        0
+        keep_alive
       end
 
       # bytesize, as write_response: a multibyte `msg` would otherwise

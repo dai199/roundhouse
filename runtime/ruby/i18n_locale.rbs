@@ -1,9 +1,22 @@
 module I18n
+  self.@site_table: Hash[String, Integer]
+  self.@leaf_table: Hash[String, String]
+  self.@node_table: Hash[String, bool]
+  self.@leaf_order: Array[String]
+  self.@empty_table: Hash[String, bool]
+  self.@chain_table: Hash[String, Array[String]]
+  self.@entry_list: Array[Array[String]]
+  self.@rule_table: Hash[String, Array[String]]
+  self.@opaque_table: Hash[String, Array[String]]
+  self.@table_loaded: bool
+  self.@catalog_loaded: bool
   class InvalidLocale < ArgumentError
   end
 
   def self.default_locale: () -> Symbol
   def self.available_locales: () -> Array[Symbol]
+  def self.locale_available?: (String | Symbol | nil locale) -> bool
+  def self.available_named: (String name) -> Symbol?
   def self.thread_locale_name: () -> String
   def self.locale: () -> Symbol
   def self.locale=: (String | Symbol | nil value) -> String
@@ -42,7 +55,14 @@ module I18n
   def self.plural_num: (Array[String] rule, Hash[String, Float] ops) -> Float
   def self.plural_step: () -> Integer
   def self.runtime_rules: () -> Hash[String, Array[String]]
-  def self.runtime_opaque: () -> Hash[String, bool]
+  def self.runtime_opaque: () -> Hash[String, Array[String]]
+  def self.opaque_fields: (String full, Hash[Symbol, untyped] options) -> Array[String]
+  def self.translate_items: (String full, Hash[Symbol, untyped] options) -> Array[String | Symbol]
+  def self.translate_strings: (String full, Hash[Symbol, untyped] options) -> Array[String]
+  def self.translate_symbols: (String full, Hash[Symbol, untyped] options) -> Array[Symbol]
+  def self.translate_integer: (String full, Hash[Symbol, untyped] options) -> Integer
+  def self.translate_float: (String full, Hash[Symbol, untyped] options) -> Float
+  def self.translate_boolean: (String full, Hash[Symbol, untyped] options) -> bool
   def self.translate_tree: (String full, Hash[Symbol, untyped] options) -> Hash[Symbol, untyped]
   def self.insert_tree: (Hash[Symbol, untyped] tree, Array[String] path, String value) -> nil
   def self.runtime_chain: (String loc) -> Array[String]
@@ -60,4 +80,5 @@ module I18n
   def self.translation_table: () -> Hash[String, Integer]
   def self.translation_entries: () -> Array[Array[String]]
   def self.load_translation_table: () -> nil
+  def self.load_runtime_catalog: () -> nil
 end

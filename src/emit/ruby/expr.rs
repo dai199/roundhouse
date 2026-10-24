@@ -139,13 +139,26 @@ pub fn emit_expr(e: &Expr) -> String {
     if is_locked_external_gem_constant(e) {
         return emit_node(&e.node);
     }
+    // `self.class::KINDS`, which ingest gave the analysis as `const_get`.
+    if e.decisions & crate::expr::CONST_PATH != 0
+        && let ExprNode::Send { recv: Some(r), method, args, block: None, .. } = &*e.node
+        && method.as_str() == "const_get"
+        && let [arg] = args.as_slice()
+        && let Some(name) = match &*arg.node {
+            ExprNode::Lit { value: crate::expr::Literal::Sym { value } } => Some(value.as_str().to_string()),
+            ExprNode::Lit { value: crate::expr::Literal::Str { value } } => Some(value.clone()),
+            _ => None,
+        }
+    {
+        return format!("{}::{name}", emit_postfix_recv(r));
+    }
     // A site a lowering replaced with a stub — `lower::object_extend`,
     // the arel `ColumnSpec::Named` placeholder — renders as the raise
     // the report describes, so the program fails THERE with the reason
     // rather than compiling a construct no target can run. Only the
     // `Unsupported` kind: an `IncompatibleBinop` the analyzer stamps is
     // left to Ruby itself, which raises at the same site on its own.
-    if let Some(kind @ DiagnosticKind::Unsupported { .. }) = &e.diagnostic {
+    if let Some(kind @ DiagnosticKind::Unsupported { .. }) = &e.diagnostic() {
         // This is an expression, including in a rescue list or a binary
         // operand. A bare command-style `raise` is not valid there.
         let stub = crate::emit::diagnostics::StubStyle::Raise
@@ -181,7 +194,7 @@ pub fn emit_expr(e: &Expr) -> String {
 fn is_locked_external_gem_constant(expr: &Expr) -> bool {
     let Some(DiagnosticKind::Unsupported {
         construct, detail, ..
-    }) = &expr.diagnostic
+    }) = &expr.diagnostic()
     else {
         return false;
     };
@@ -200,7 +213,7 @@ fn is_locked_external_gem_constant(expr: &Expr) -> bool {
 /// `+`: spinel freezes a bare literal, and the source made this copy
 /// because it mutates it.
 fn is_mutable_string_literal(e: &Expr) -> bool {
-    e.hint == Some(crate::expr::IrHint::MutableStringLiteral)
+    e.hint() == &Some(crate::expr::IrHint::MutableStringLiteral)
         && matches!(&*e.node, ExprNode::Lit { value: Literal::Str { .. } })
 }
 
@@ -1500,10 +1513,11 @@ pub(super) fn emit_send_base(
 }
 
 /// A leading `if`/`case`/… argument must be parenthesized: paren-less,
-/// `j if c … end` reads `if` as a statement modifier of the call.
+/// `j if c … end` reads `if` as a statement modifier of the call. So
+/// must a leading Hash literal: `arrange {}, rel` reads `{}` as a block.
 fn first_arg_opens_block(args_s: &[String]) -> bool {
     args_s.first().is_some_and(|a| {
-        ["if ", "unless ", "case ", "while ", "until ", "begin"].iter().any(|k| a.starts_with(k))
+        a.starts_with('{') || ["if ", "unless ", "case ", "while ", "until ", "begin"].iter().any(|k| a.starts_with(k))
     })
 }
 

@@ -18,6 +18,7 @@
 //! broadcasts orchestration, schema → DDL, and router dispatch tables.
 
 pub mod arel;
+pub mod array_columns;
 pub mod associations;
 pub mod association_new;
 pub mod blank;
@@ -99,6 +100,8 @@ pub mod attachable;
 pub mod attachables_grep;
 pub mod errors_index;
 pub mod job_class_side;
+pub mod transaction_after_commit;
+pub mod module_mattr_storage;
 pub mod job_payload;
 pub mod mailer_class_side;
 pub mod mailer_templates;
@@ -124,17 +127,20 @@ pub mod dirty_predicate_kwargs;
 pub mod job_test_only;
 pub mod test_cookie_jar;
 pub mod sti_scope;
+pub mod default_scope;
 mod sti_subclass_callbacks;
 pub mod sum_symbol;
 pub mod values_at_splat;
 pub mod request_index;
 pub mod arel_attribute;
+pub mod relation_class_calls;
 pub mod exclude_predicate;
 pub mod in_predicate;
 pub mod including;
 pub mod enum_symbols;
 pub mod has_json;
 pub mod serialize;
+pub mod column_slot;
 pub mod assoc_loaded;
 pub mod object_extend;
 pub mod nested_def;
@@ -168,6 +174,15 @@ pub mod session_options;
 pub mod status_literal;
 pub mod to_param_residue;
 pub mod relation_residue;
+/// Host-only: the Oj emit gate reads `project::BuildTarget`, which the
+/// wasm build excludes. The playground has no emit gate to raise it for.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod oj;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod ruby_family_gems;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod gem_refusal;
+pub mod constantize;
 pub mod params_residue;
 pub mod params_permit;
 pub mod normalizes;
@@ -670,6 +685,14 @@ const POST_ANALYZE_PASS_ORDER: &[(&str, &[&str])] = &[
     ("mailer_class_side", &[]),
     ("mailer_templates", &[]),
     ("job_class_side", &[]),
+    // `….current_transaction.after_commit { … }` -> the block as a lambda
+    // argument, the shape the runtime holds for the COMMIT. Consumes a
+    // shape no pass produces or reads; no constraints.
+    ("transaction_after_commit", &[]),
+    // A module's `mattr_*` `@@x` storage -> its own `@x`, when nothing
+    // outside the module names `@@x`. Consumes ingest's mattr expansion,
+    // which no pass rewrites; no constraints.
+    ("module_mattr_storage", &[]),
     ("send_static_dispatch", &[]),
     // Grounds the plural duration-unit calls that send_static_dispatch
     // synthesizes into case arms, so it must observe that pass's output.
@@ -827,6 +850,8 @@ pub fn apply_post_analyze_lowerings(
     ran!("params_permit");
     indifferent_access::apply_indifferent_access_lowering(app);
     ran!("indifferent_access");
+    // Not fused: a local bound to `arel_table` is a whole-body fact, which a per-node rewrite cannot see
+    arel_attribute::apply_arel_attribute_lowering(app);
     crate::timings::phase("post-analyze: fused send rewrites", || {
         fused::apply_fused_independent_rewrites(app);
     });
@@ -932,6 +957,7 @@ pub fn apply_post_analyze_lowerings(
     // an `update` site.
     update_writer_check::apply_update_writer_check(app);
     ran!("update_writer_check");
+    unscope_check::rewrite_unscope_where(app);
     diags.extend(unscope_check::apply_unscope_check(app));
     ran!("unscope_check");
     inquiry::apply_inquiry_lowering(app);
@@ -962,6 +988,7 @@ pub fn apply_post_analyze_lowerings(
     ran!("send_file");
     html_safe::apply_html_safe_lowering(app);
     ran!("html_safe");
+    diags.extend(crate::ingest::rake_tasks::gap_diagnostics(app));
     diags.extend(module_mixins::apply_module_mixins_lowering(app));
     ran!("module_mixins");
     transaction_ground::apply_transaction_grounding(app);
@@ -1028,6 +1055,10 @@ pub fn apply_post_analyze_lowerings(
     ran!("mailer_templates");
     diags.extend(job_class_side::apply_job_class_side(app));
     ran!("job_class_side");
+    transaction_after_commit::apply_transaction_after_commit(app);
+    ran!("transaction_after_commit");
+    module_mattr_storage::apply_module_mattr_storage(app);
+    ran!("module_mattr_storage");
     diags.extend(crate::timings::phase("post-analyze: send_dispatch", || {
         send_dispatch::apply_send_static_dispatch(app, registry)
     }));
@@ -1238,6 +1269,18 @@ pub(crate) fn for_each_owned_hook_body(
                         f(cond);
                     }
                 }
+                // `validates :attr, …, if: -> { … }` / `unless: …` — a
+                // lambda guard is a general expression, same as a
+                // callback's, and needs the same passes (`.in?`
+                // rewriting, attribute aliasing, …) to see it.
+                crate::dialect::ModelBodyItem::Validation { validation, .. } => {
+                    if let Some(cond) = &mut validation.if_cond {
+                        f(cond);
+                    }
+                    if let Some(cond) = &mut validation.unless_cond {
+                        f(cond);
+                    }
+                }
                 // Unrecognized class-body exprs (constant procs and
                 // friends) round-trip verbatim into the emit — their
                 // sites are just as reachable.
@@ -1386,6 +1429,14 @@ pub(crate) fn for_each_hook_body_ref(
                         f(cond);
                     }
                 }
+                crate::dialect::ModelBodyItem::Validation { validation, .. } => {
+                    if let Some(cond) = &validation.if_cond {
+                        f(cond);
+                    }
+                    if let Some(cond) = &validation.unless_cond {
+                        f(cond);
+                    }
+                }
                 crate::dialect::ModelBodyItem::Unknown { expr, .. } => f(expr),
                 crate::dialect::ModelBodyItem::Association {
                     assoc: crate::dialect::Association::HasMany { extension, .. },
@@ -1501,6 +1552,73 @@ pub(crate) fn for_each_forwarding_body_ref(app: &crate::App, f: &mut impl FnMut(
     forwarding_roots!(app, f, iter, as_ref);
 }
 
+/// Mutable twin of [`for_each_emit_body_ref`]. The two must walk the same
+/// roots: a rewrite that sees only one of them leaves the other copy to emit.
+pub(crate) fn for_each_emit_body(app: &mut crate::App, f: &mut impl FnMut(&mut crate::expr::Expr)) {
+    for_each_forwarding_body(app, f);
+    for model in &mut app.models {
+        for item in &mut model.body {
+            if let crate::dialect::ModelBodyItem::Association { assoc, .. } = item {
+                match assoc {
+                    crate::dialect::Association::BelongsTo { default: Some(e), .. }
+                    | crate::dialect::Association::HasMany { scope: Some(e), .. }
+                    | crate::dialect::Association::HasOne { scope: Some(e), .. } => f(e),
+                    _ => {}
+                }
+            }
+        }
+    }
+    for controller in &mut app.controllers {
+        for item in &mut controller.body {
+            if let crate::dialect::ControllerBodyItem::Action { action, .. } = item {
+                for default in action.kw_params.iter_mut().filter_map(|(_, e)| e.as_mut()) {
+                    f(default);
+                }
+            }
+        }
+    }
+    for view in &mut app.views {
+        if let Some(locals) = &mut view.strict_locals {
+            for param in locals {
+                if let Some(default) = &mut param.default {
+                    f(default);
+                }
+            }
+        }
+    }
+    for fixture in &mut app.fixtures {
+        for e in &mut fixture.preamble {
+            f(e);
+        }
+        for record in fixture.records.values_mut() {
+            for value in record.values_mut() {
+                if let crate::dialect::FixtureValue::Ruby(e) = value {
+                    f(e);
+                }
+            }
+        }
+    }
+    for helper in &mut app.routes.direct_helpers {
+        f(&mut helper.body);
+    }
+    for function in &mut app.sql_functions {
+        match &mut function.kind {
+            crate::app::SqlFunctionKind::Scalar { method } => visit_sql_method(method, f),
+            crate::app::SqlFunctionKind::Aggregate { step, finalize } => {
+                visit_sql_method(step, f);
+                visit_sql_method(finalize, f);
+            }
+        }
+    }
+}
+
+fn visit_sql_method(method: &mut crate::dialect::MethodDef, f: &mut impl FnMut(&mut crate::expr::Expr)) {
+    f(&mut method.body);
+    for default in method.params.iter_mut().filter_map(|p| p.default.as_mut()) {
+        f(default);
+    }
+}
+
 /// Survey every emit-bound expression root, including defaults and fixture
 /// expressions outside the forwarding pass's narrower inventory. Callers walk
 /// children themselves, so each root is visited exactly once.
@@ -1509,7 +1627,8 @@ pub(crate) fn for_each_emit_body_ref(app: &crate::App, f: &mut impl FnMut(&crate
     for association in app.models.iter().flat_map(|model| model.associations()) {
         match association {
             crate::dialect::Association::BelongsTo { default: Some(e), .. }
-            | crate::dialect::Association::HasMany { scope: Some(e), .. } => f(e),
+            | crate::dialect::Association::HasMany { scope: Some(e), .. }
+            | crate::dialect::Association::HasOne { scope: Some(e), .. } => f(e),
             _ => {}
         }
     }
