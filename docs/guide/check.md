@@ -109,7 +109,7 @@ Inference goes as far as the conventions carry it. Where they run out —
 a value handed back from a gem the census does not model, a method
 whose return type depends on a branch the analyzer cannot follow — the
 app can write the answer down, in either of two places that feed the
-same table:
+same table, over a third the app installs rather than writes:
 
 - **`sig/**/*.rbs`** — RBS written for roundhouse, keyed by class and
   method. This is the sidecar the analyzer has always read; it wins
@@ -160,8 +160,22 @@ same table:
   is not typed, so a binding there changes nothing and its type is not
   checked. The Ruby targets emit neither form (a `T.bind` whose value
   is used stays `self`); every other target refuses both by name.
+- **gem_rbs_collection** — the community RBS for a gem listed in
+  `source_gems`, as `rbs collection install` lays it out (the
+  `path:` of `rbs_collection.yaml`, `.gem_rbs_collection` by default):
+  per gem, the newest version directory not past the one in
+  `Gemfile.lock`. It is the lowest layer — `sig/` and Sorbet both
+  override it method by method, so a wrong collection answer is fixed
+  by declaring the method in `sig/`. It only types the gem source the
+  app already compiles; a gem outside `source_gems` gets nothing from
+  it, because a signature is not an implementation. RBS the reader
+  cannot type, and methods answering `untyped`, are skipped and
+  counted in a warning instead of failing the file.
+  The precedence is the one list `SIGNATURE_LAYERS` in
+  `src/ingest/app.rs`: roundhouse's own facades, then `sig/`, then
+  Sorbet, then the collection.
 
-The two sources above settle against each other — the sidecar wins
+These sources settle against each other — the higher layer wins
 where both declare the same method. Against INFERENCE, neither wins:
 where the analyzer can type a method's body, the return harvested from
 that body overwrites the declared one at dispatch, whichever source

@@ -94,6 +94,30 @@ pub fn parse_app_signatures(
     Ok(out)
 }
 
+thread_local! {
+    static FOREIGN_SKIPS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Not `parse_app_signatures`: RBS written for another checker skips what this reader cannot type, or an `untyped` answer, instead of failing the file.
+pub fn parse_foreign_signatures(
+    source: &str,
+) -> Result<(std::collections::HashMap<ClassId, std::collections::HashMap<Symbol, Ty>>, usize), String> {
+    FOREIGN_SKIPS.with(|c| c.set(Some(0)));
+    let parsed = parse_app_signatures(source);
+    let skipped = FOREIGN_SKIPS.with(|c| c.replace(None)).unwrap_or(0);
+    parsed.map(|sigs| (sigs, skipped))
+}
+
+fn skip_foreign() -> bool {
+    FOREIGN_SKIPS.with(|c| match c.get() {
+        Some(n) => {
+            c.set(Some(n + 1));
+            true
+        }
+        None => false,
+    })
+}
+
 /// Parse RBS `@ivar: T` declarations grouped by enclosing class/module.
 /// Names are stored without the leading `@` so they match
 /// `ExprNode::Ivar` / `Ctx::ivar_bindings` keys.
@@ -322,7 +346,14 @@ fn collect_class_methods<'a, I: Iterator<Item = Node<'a>>>(
         match member {
             Node::MethodDefinition(method) => {
                 let name = Symbol::new(method.name().as_str());
-                let ty = method_signature_ty(&method, Some(class_name), aliases)?;
+                let ty = match method_signature_ty(&method, Some(class_name), aliases) {
+                    Ok(ty) => ty,
+                    Err(_) if skip_foreign() => continue,
+                    Err(message) => return Err(message),
+                };
+                if matches!(&ty, Ty::Fn { ret, .. } if matches!(**ret, Ty::Untyped)) && skip_foreign() {
+                    continue;
+                }
                 out.entry(class_id.clone()).or_default().insert(name, ty);
             }
             // Nested class/module inside this one — recurse with the

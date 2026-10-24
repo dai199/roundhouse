@@ -2055,6 +2055,7 @@ end
     // Rails conventions can't fully type on their own. Recursively
     // walk the sig dir, parse each file, merge into app.rbs_signatures
     // keyed by the declared class/module's fully-qualified name.
+    let mut layers = SignatureLayers::default();
     let sig_dir = dir.join("sig");
     if vfs.is_dir(&sig_dir) {
         let mut stack = vec![sig_dir];
@@ -2078,12 +2079,7 @@ end
                     }
                 });
                 if let Some(sigs) = unwrap_or_record(parsed)? {
-                    for (class_id, methods) in sigs {
-                        app.rbs_signatures
-                            .entry(class_id)
-                            .or_default()
-                            .extend(methods);
-                    }
+                    layers.add(SignatureLayer::AppSig, sigs);
                 }
                 // The same file's `include`s. A gem's base class is
                 // opaque to the tree, so its ancestry can only come
@@ -2115,12 +2111,7 @@ end
     // String), so it is correct where the real gem runs too — and
     // target-conditional inference would let the CRuby and spinel lanes
     // disagree about types, which is what dual-runtime parity forbids.
-    for (class_id, methods) in crate::facades::signatures_for(&app) {
-        app.rbs_signatures
-            .entry(class_id)
-            .or_default()
-            .extend(methods);
-    }
+    layers.add(SignatureLayer::Facade, crate::facades::signatures_for(&app).into_iter().collect());
 
     // The app's own sorbet-runtime `sig` blocks, read from the trees
     // that hold its classes. Same table, same consumers as the `sig/`
@@ -2138,14 +2129,11 @@ end
             let Ok(source) = vfs.read(&entry) else { continue };
             let (signatures, abstracts) = super::sorbet_sig::ingest_sorbet_declarations(&source);
             drop_abstract_stubs(&mut app, &abstracts);
-            for (class_id, methods) in signatures {
-                let declared = app.rbs_signatures.entry(class_id).or_default();
-                for (name, ty) in methods {
-                    declared.entry(name).or_insert(ty);
-                }
-            }
+            layers.add(SignatureLayer::Sorbet, signatures.into_iter().collect());
         }
     }
+    layers.add(SignatureLayer::GemCollection, gem_collection_signatures(vfs, dir, &app.extensions.source_gems, app.gem_lock.as_ref()));
+    layers.merge_into(&mut app.rbs_signatures);
 
     // The boot sources were observed before the folds; observing them
     // again would count each of their writes twice.
@@ -3354,6 +3342,128 @@ fn synthesize_template_only_actions(app: &mut App) {
 /// (a concern declaring `abstract.returns(ActionController::Parameters)
 /// def params; end` made every includer's `params` nil). The sig stays in
 /// `rbs_signatures` as the module's declaration; only the empty body goes.
+/// Highest first: a method one layer declares hides the same method in every layer after it.
+const SIGNATURE_LAYERS: [SignatureLayer; 4] =
+    [SignatureLayer::Facade, SignatureLayer::AppSig, SignatureLayer::Sorbet, SignatureLayer::GemCollection];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SignatureLayer {
+    Facade,
+    AppSig,
+    Sorbet,
+    GemCollection,
+}
+
+type ClassSignatures = HashMap<crate::ClassId, HashMap<Symbol, crate::Ty>>;
+
+#[derive(Default)]
+struct SignatureLayers {
+    added: Vec<(SignatureLayer, ClassSignatures)>,
+}
+
+impl SignatureLayers {
+    fn add(&mut self, layer: SignatureLayer, signatures: ClassSignatures) {
+        self.added.push((layer, signatures));
+    }
+
+    fn merge_into(self, out: &mut ClassSignatures) {
+        let mut added = self.added;
+        for layer in SIGNATURE_LAYERS {
+            let mut combined = ClassSignatures::new();
+            for (_, signatures) in added.iter_mut().filter(|(l, _)| *l == layer) {
+                for (class_id, methods) in std::mem::take(signatures) {
+                    combined.entry(class_id).or_default().extend(methods);
+                }
+            }
+            for (class_id, methods) in combined {
+                let declared = out.entry(class_id).or_default();
+                for (name, ty) in methods {
+                    declared.entry(name).or_insert(ty);
+                }
+            }
+        }
+    }
+}
+
+/// gem_rbs_collection signatures for the gems the app compiles from source: the inference reads them, but they never stand in for a gem body the app does not carry.
+fn gem_collection_signatures<V: Vfs + ?Sized>(
+    vfs: &V,
+    dir: &Path,
+    gems: &[String],
+    lock: Option<&crate::gems::Lockfile>,
+) -> ClassSignatures {
+    let mut out = ClassSignatures::new();
+    if gems.is_empty() {
+        return out;
+    }
+    let root = dir.join(gem_collection_path(vfs, dir));
+    for gem in gems {
+        let Some(version_dir) = collection_version_dir(vfs, &root.join(gem), lock.and_then(|l| l.version_of(gem))) else { continue };
+        let mut skipped = 0;
+        let mut stack = vec![version_dir];
+        while let Some(current) = stack.pop() {
+            let Ok(mut entries) = vfs.read_dir(&current) else { continue };
+            entries.sort();
+            for entry in entries {
+                if vfs.is_dir(&entry) {
+                    stack.push(entry);
+                    continue;
+                }
+                if entry.extension().and_then(|s| s.to_str()) != Some("rbs") {
+                    continue;
+                }
+                let Ok(source) = vfs.read_to_string(&entry) else { continue };
+                match crate::rbs::parse_foreign_signatures(&source) {
+                    Ok((sigs, count)) => {
+                        skipped += count;
+                        for (class_id, methods) in sigs {
+                            out.entry(class_id).or_default().extend(methods);
+                        }
+                    }
+                    Err(message) => warn_gem_collection(format!("{}: not read: {message}", entry.display())),
+                }
+            }
+        }
+        if skipped > 0 {
+            warn_gem_collection(format!("{gem}: {skipped} gem_rbs_collection signatures are outside what this reader types, or answer untyped, and are left to inference"));
+        }
+    }
+    out
+}
+
+fn gem_collection_path<V: Vfs + ?Sized>(vfs: &V, dir: &Path) -> PathBuf {
+    let configured = vfs
+        .read_to_string(&dir.join("rbs_collection.yaml"))
+        .ok()
+        .and_then(|text| serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&text).ok())
+        .and_then(|config| config.get("path").and_then(|p| p.as_str()).map(PathBuf::from));
+    configured.unwrap_or_else(|| PathBuf::from(".gem_rbs_collection"))
+}
+
+/// The newest collection version not past the locked one, as `rbs collection install` picks it.
+fn collection_version_dir<V: Vfs + ?Sized>(vfs: &V, gem_dir: &Path, locked: Option<&str>) -> Option<PathBuf> {
+    if !vfs.is_dir(gem_dir) {
+        return None;
+    }
+    let segments = |v: &str| v.split('.').map(|s| s.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
+    let mut versions: Vec<(Vec<u64>, PathBuf)> = vfs
+        .read_dir(gem_dir)
+        .ok()?
+        .into_iter()
+        .filter(|p| vfs.is_dir(p))
+        .filter_map(|p| Some((segments(p.file_name()?.to_str()?), p)))
+        .collect();
+    versions.sort();
+    let ceiling = locked.map(segments);
+    versions.into_iter().rev().find(|(v, _)| ceiling.as_ref().is_none_or(|c| v <= c)).map(|(_, p)| p)
+}
+
+fn warn_gem_collection(detail: String) {
+    let mut d = crate::diagnostic::Diagnostic::unsupported(crate::span::Span::synthetic(), None, "gem_rbs_collection", detail);
+    d.severity = crate::diagnostic::Severity::Warning;
+    super::prism::push(d);
+}
+
 fn drop_abstract_stubs(
     app: &mut App,
     abstracts: &HashMap<crate::ident::ClassId, std::collections::HashSet<crate::ident::Symbol>>,
