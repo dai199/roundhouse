@@ -308,6 +308,13 @@ module ActiveRecord
       raise NotImplementedError, "id=: subclasses must override"
     end
 
+    # The primary key, which is `id` unless the model names another
+    # column. A table can have both; `id` then stays that column and
+    # this method still answers the key. Models override it.
+    def _primary_key_value
+      id
+    end
+
     # `to_param` — the same contract. The lowerer synthesizes it on
     # ApplicationRecord (the key as a String, Rails' `id&.to_s`) and a
     # model may override it (lobsters' Story answers `short_id`).
@@ -374,7 +381,12 @@ module ActiveRecord
     # exactly once; before this it also ran on the empty shell, where
     # `new_record?` is true and every column is blank. A distinct object
     # from EMPTY_ATTRS, which is also what a bare `Model.new` receives.
-    HYDRATE_ATTRS = {}.freeze
+    # `Hash.new`, NOT a `{}` literal: CRuby compiles `{}.freeze` to one
+    # shared frozen empty Hash, so two constants spelled that way are
+    # the same object and a bare `new` would be taken for hydration.
+    # The transpiled targets read a bare `Hash.new` constant as `{}`
+    # (`runtime_src::is_bare_hash_new`).
+    HYDRATE_ATTRS = Hash.new.freeze
 
     # `attrs = {}` keeps Base's constructor signature compatible
     # with subclasses that take attrs (`def initialize(attrs = {})`).
@@ -1184,6 +1196,15 @@ module ActiveRecord
       true
     end
 
+    # `touch_later` — what Rails' `belongs_to …, touch: true` calls.
+    # Rails defers the write to just before the transaction's COMMIT and
+    # stamps each record once, however many children asked; the
+    # ruby-family reopen (connection.rb) does that. A strict target has
+    # no transaction to wait on, so here it is `touch`.
+    def touch_later
+      touch
+    end
+
     # `touch` after a call-site column write (`touch :connected_at`,
     # `increment!(:connections, touch: true)`): the whole row, so the
     # assigned column is written with the timestamp.
@@ -1195,12 +1216,11 @@ module ActiveRecord
     end
 
     # `destroy!` — Rails raises `RecordNotDestroyed` when a
-    # `before_destroy` callback throws `:abort`. This runtime has no
-    # abort channel (`before_destroy` returns into the void and
-    # `destroy` always completes), so the bang form is the same
-    # operation. Written out rather than aliased for the strict
-    # targets, and kept as its own method so the raise lands here when
-    # an abort channel does exist.
+    # `before_destroy` callback throws `:abort`. The strict targets have
+    # no abort channel (`throw` is reported as Ruby-only there), so the
+    # bang form is the same operation; the Ruby targets' connection.rb
+    # catches the abort and raises. Written out rather than aliased for
+    # the strict targets.
     def destroy!
       destroy
     end

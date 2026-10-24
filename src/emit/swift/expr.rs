@@ -1171,7 +1171,7 @@ pub fn emit_expr(e: &Expr) -> String {
 /// append is amortized O(1)); mirrors `kotlin::expr::try_string_builder`.
 /// Non-hinted sites fall through to the normal walkers.
 fn try_string_builder(e: &Expr) -> Option<String> {
-    match e.hint? {
+    match e.hint().as_ref()? {
         crate::expr::IrHint::MutableStringLiteral => None, // emitted as the plain literal
         crate::expr::IrHint::StringBuilderInit => {
             if let ExprNode::Assign { target: LValue::Var { name, .. }, .. } = &*e.node {
@@ -1453,9 +1453,67 @@ fn emit_literal(lit: &Literal) -> String {
         Literal::Str { value } => format!("\"{}\"", escape_str(value)),
         // No symbol type in Swift → string.
         Literal::Sym { value } => format!("\"{}\"", escape_str(value.as_str())),
-        Literal::Regex { pattern, .. } => {
-            format!("try! NSRegularExpression(pattern: \"{}\")", escape_str(pattern))
+        Literal::Regex { pattern, flags } => {
+            let options = swift_regex_options(flags);
+            if options.is_empty() {
+                format!("try! NSRegularExpression(pattern: \"{}\")", escape_str(pattern))
+            } else {
+                format!(
+                    "try! NSRegularExpression(pattern: \"{}\", options: [{options}])",
+                    escape_str(pattern)
+                )
+            }
         }
+    }
+}
+
+/// Ruby regex flags this build can reproduce exactly: `i` →
+/// `.caseInsensitive`. Ruby's `m` (dot-matches-newline) is
+/// `.dotMatchesLineSeparators`. Ruby's `^`/`$` are always line
+/// anchors, so a flagged `m` also adds `.anchorsMatchLines`. Any
+/// other flag character stays an ingest-time gap, so none reaches
+/// here.
+fn swift_regex_options(flags: &str) -> String {
+    let bits = crate::emit::shared::regex_literal::parse_ruby_regex_flags(flags);
+    let mut parts: Vec<&str> = Vec::new();
+    if bits.ignore_case {
+        parts.push(".caseInsensitive");
+    }
+    if bits.dot_matches_newline {
+        parts.push(".dotMatchesLineSeparators");
+        parts.push(".anchorsMatchLines");
+    }
+    parts.join(", ")
+}
+
+#[cfg(test)]
+mod regex_flag_tests {
+    #[test]
+    fn rubys_m_keeps_line_anchors_as_well_as_dotall() {
+        assert_eq!(swift_regex_options("m"), ".dotMatchesLineSeparators, .anchorsMatchLines");
+    }
+
+    use super::{emit_literal, swift_regex_options};
+    use crate::expr::Literal;
+
+    #[test]
+    fn no_flags_drop_the_options_argument() {
+        let lit = Literal::Regex { pattern: "a.b".into(), flags: "".into() };
+        assert_eq!(emit_literal(&lit), r#"try! NSRegularExpression(pattern: "a.b")"#);
+    }
+
+    #[test]
+    fn ignore_case_maps_to_case_insensitive() {
+        assert_eq!(swift_regex_options("i"), ".caseInsensitive");
+    }
+
+    #[test]
+    fn ignore_case_and_dot_matches_newline_combine_in_the_options_array() {
+        let lit = Literal::Regex { pattern: "a.b".into(), flags: "im".into() };
+        assert_eq!(
+            emit_literal(&lit),
+            r#"try! NSRegularExpression(pattern: "a.b", options: [.caseInsensitive, .dotMatchesLineSeparators, .anchorsMatchLines])"#
+        );
     }
 }
 
@@ -2337,6 +2395,22 @@ fn emit_assign(target: &LValue, value: &Expr) -> String {
                         return format!("{kw} {n}: {ct} = {lit}");
                     }
                 }
+                // An association build's owner temp (`rh_build_owner_0 =
+                // @article`) stands in for the `@article.x` it replaced, which
+                // unwrapped the implicitly-unwrapped ivar (`var article:
+                // Article!`). Inferred, the temp is an `Article?`; given the
+                // ivar's own type it unwraps as that read did. Only this temp,
+                // which lowering marks: a user's local from an ivar may well
+                // hold its nil.
+                if value.decisions & crate::expr::BUILD_OWNER != 0
+                    && let ExprNode::Ivar { name } = &*value.node
+                    && let Some(ty) = instance_prop_ty(name.as_str()).or_else(|| value.ty.clone())
+                {
+                    let st = swift_ty(&ty);
+                    if !st.ends_with('?') && !st.contains("Any") {
+                        return format!("{kw} {n}: {st} = {val}");
+                    }
+                }
                 format!("{kw} {n} = {val}")
             }
         }
@@ -2585,6 +2659,10 @@ fn emit_send(
     args: &[Expr],
     block: Option<&Expr>,
 ) -> String {
+    if let Some(recv) = crate::emit::shared::fn_call::function_receiver(recv, method, block) {
+        let args_s: Vec<String> = args.iter().map(emit_expr).collect();
+        return format!("{}({})", emit_expr(recv), args_s.join(", "));
+    }
     let args_s: Vec<String> = args.iter().map(emit_expr).collect();
 
     // Temporal reader intrinsic: `ActiveSupport.parse_db_time(s)` parses a

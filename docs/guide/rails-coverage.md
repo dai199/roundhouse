@@ -26,7 +26,7 @@ comments, nested routes, validations, Turbo Streams, Action Cable,
 Tailwind, JSON endpoints) is the shared DOM-equivalence fixture for
 **every server target** in scheduled full validation. Ordinary PRs run the
 Ruby floor plus selected target lanes; pushes to canonical `main` run Ruby
-plus Spinel. The extra-language matrix waits for the four-hour schedule or
+plus Spinel. The extra-language matrix waits for the three-hour schedule or
 `ci:full`. See [CI coverage](../ci/README.md).
 A passing target's comparison proves the blog's features on that target.
 
@@ -133,7 +133,7 @@ diagnostic corpus until its independent framework and Spinel gaps close.
 |---|---|---|
 | Attributes | From `db/schema.rb` (migrations as fallback), typed per column; `id`, timestamps, defaults, nullability | + `enum`, `serialize`/`has_json` columns, `has_secure_token`, `has_secure_password` (real bcrypt) |
 | Associations | `belongs_to`, `has_many` (with `dependent:`), `has_one`; association readers, builders, `<assoc>_ids` | + `has_many :through`, polymorphic, `touch:`, `has_one_attached`/`has_many_attached`, `has_rich_text` |
-| Validations | `presence`, `absence`, `length` (min/max), `numericality` (bounds, `only_integer`), `format`, `inclusion`, `uniqueness`; `errors`, `full_messages`, `valid?` | + custom `validate` methods, conditional `if:`/`unless:` |
+| Validations | `presence`, `absence`, `length` (min/max), `numericality` (bounds, `only_integer`), `format`, `inclusion`; `errors`, `full_messages`, `valid?` | + custom `validate` methods, conditional `if:`/`unless:`, `uniqueness` (`scope:`, `case_sensitive:`, `allow_nil:`/`allow_blank:`; a reported gap on the strict targets) |
 | Callbacks | `after_create_commit` and the Turbo `broadcasts_to` family | + `before_save`/`after_save`, `before_destroy`, `after_touch`, STI-aware callback inheritance |
 | Queries | `where` (hash and string), `order`, `limit`, `find`, `find_by`, `first`/`last`, `count`, `exists?`, `includes`, `pluck`, named `scope`s — folded to SQL by the Arel builder | + `joins`, `left_joins`, `group`/`count`, `select`, `distinct`, `or`, `none`, `find_or_create_by`, `insert_all`, `update_all`, `in_batches`, `sum`; a live `Relation` for chains the builder can't fold |
 | Persistence | `create`, `save`, `update`, `destroy`, `new`/`build` | + `destroy!`, `increment!`, `update_columns`, transactions, dirty tracking predicates |
@@ -225,7 +225,7 @@ promise in the API prose.
 | Component | Status |
 |---|---|
 | Action Cable | Every server target: `/cable`, `turbo_stream_from` subscriptions, model broadcasts. Campfire tier adds application channels with `subscribed`/`unsubscribed`, `stream_for`, and presence, and client actions (`subscription.perform(action, data)`) with Rails' rules for which methods are actions and which receive `data`. |
-| Active Job | Campfire tier: `perform_later` runs on an in-process queue in the app; `ActiveJob::TestHelper` assertions in the tests. On the Ruby-family lanes a job is queued as a serialized ActiveJob payload (GlobalID records, primitives, Symbols, Times and Arrays of them), honoring `queue_as`, `discard_on ActiveJob::DeserializationError` and `enqueue_after_transaction_commit`; a job with other argument types keeps a closure, with a warning. No external queue adapter. |
+| Active Job | Campfire tier: `perform_later` runs on an in-process queue in the app; `ActiveJob::TestHelper` assertions in the tests. On the Ruby-family lanes a job is queued as a serialized ActiveJob payload (GlobalID records, primitives, Symbols, Times and Arrays of them), honoring `queue_as`, `discard_on ActiveJob::DeserializationError` and `enqueue_after_transaction_commit`; a job with other argument types keeps a closure, with a warning. With `queue_adapter :sidekiq` on `ApplicationJob`, those lanes push payload jobs to Redis in Sidekiq 8's format instead, honoring literal `set(wait:, wait_until:, queue:)`; run them with a Ruby Sidekiq process. The other targets warn and run jobs in process. No other external queue adapter. |
 | Active Storage | Campfire tier: blobs and attachments, the disk service, the engine's routes (redirect and representation), variants via libvips on Spinel. No cloud services. |
 | Action Text | Campfire tier: `has_rich_text`, the safe-list sanitizer, attachment rendering. |
 | Action Mailer | Ruby tier: mailer classes, `mail(...)`, `deliver_now`/`deliver_later` — delivery appends to `ActionMailer::Base.deliveries` (Rails' `:test` method, which the emitted tests assert against). No SMTP. |

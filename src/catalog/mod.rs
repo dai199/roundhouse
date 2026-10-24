@@ -182,6 +182,9 @@ pub enum ReturnKind {
     /// (`article[:id]` is actually Int), but matches the existing
     /// declared shape and isn't worse than today.
     Str,
+    /// Returns `Str | Nil`. Example: `Base#cache_version` — nil on a
+    /// model with no `updated_at` column.
+    StrOrNil,
     /// Reference to a concrete class by dotted-name path
     /// (e.g. `"ActiveModel::Errors"`). Analyzer instantiates as
     /// `Ty::Class { id: ClassId(<path>), args: vec![].into() }`.
@@ -331,6 +334,20 @@ pub const AR_CATALOG: &[CatalogedMethod] = &[
     },
     CatalogedMethod {
         name: "find_or_create_by!",
+        receiver: ReceiverContext::Class,
+        effect: EffectClass::DbWrite,
+        chain: ChainKind::NotApplicable,
+        return_kind: Some(ReturnKind::SelfType),
+    },
+    CatalogedMethod {
+        name: "create_or_find_by",
+        receiver: ReceiverContext::Class,
+        effect: EffectClass::DbWrite,
+        chain: ChainKind::NotApplicable,
+        return_kind: Some(ReturnKind::SelfType),
+    },
+    CatalogedMethod {
+        name: "create_or_find_by!",
         receiver: ReceiverContext::Class,
         effect: EffectClass::DbWrite,
         chain: ChainKind::NotApplicable,
@@ -1066,6 +1083,34 @@ pub const AR_CATALOG: &[CatalogedMethod] = &[
         chain: ChainKind::NotApplicable,
         return_kind: Some(ReturnKind::Str),
     },
+    // `cache_key` / `cache_version` / `cache_key_with_version`
+    // (`runtime/ruby/active_record/base.rb`): a single record's half
+    // of the fragment-cache key Relation's own trio answers for a
+    // collection — see the `cache_key`/`cache_version`/
+    // `cache_key_with_version` entries under `ReceiverContext::Relation`
+    // below for the companion case and why both are cataloged here
+    // rather than parsed from base.rbs/relation.rbs.
+    CatalogedMethod {
+        name: "cache_key",
+        receiver: ReceiverContext::Instance,
+        effect: EffectClass::Pure,
+        chain: ChainKind::NotApplicable,
+        return_kind: Some(ReturnKind::Str),
+    },
+    CatalogedMethod {
+        name: "cache_version",
+        receiver: ReceiverContext::Instance,
+        effect: EffectClass::Pure,
+        chain: ChainKind::NotApplicable,
+        return_kind: Some(ReturnKind::StrOrNil),
+    },
+    CatalogedMethod {
+        name: "cache_key_with_version",
+        receiver: ReceiverContext::Instance,
+        effect: EffectClass::Pure,
+        chain: ChainKind::NotApplicable,
+        return_kind: Some(ReturnKind::Str),
+    },
     // Rails' `SignedId#signed_id(purpose:, expires_in:)` — a signed
     // token, and a String however it is produced.
     //
@@ -1670,6 +1715,38 @@ pub const AR_CATALOG: &[CatalogedMethod] = &[
         chain: ChainKind::Terminal,
         return_kind: Some(ReturnKind::Str),
     },
+    // `cache_key` / `cache_version` / `cache_key_with_version`
+    // (`runtime/ruby/active_record/relation.rb`): the fragment-cache
+    // key a jbuilder `json.cache!` wraps around a whole collection.
+    // `DbRead`, not `Pure`, like `count`/`maximum` above — the key
+    // queries COUNT/MAX under the hood. Without a catalog entry here,
+    // `send.rs`'s `Ty::Relation` arm never reaches the runtime method
+    // at all (dispatch on a Relation receiver goes through THIS
+    // catalog, not a parse of relation.rbs — that file is the sidecar
+    // emitted next to relation.rb, not an analysis source), so every
+    // `@widgets.cache_key_with_version` call failed `check` as "no
+    // known method" before it ever got far enough to raise at runtime.
+    CatalogedMethod {
+        name: "cache_key",
+        receiver: ReceiverContext::Relation,
+        effect: EffectClass::DbRead,
+        chain: ChainKind::Terminal,
+        return_kind: Some(ReturnKind::Str),
+    },
+    CatalogedMethod {
+        name: "cache_version",
+        receiver: ReceiverContext::Relation,
+        effect: EffectClass::DbRead,
+        chain: ChainKind::Terminal,
+        return_kind: Some(ReturnKind::Str),
+    },
+    CatalogedMethod {
+        name: "cache_key_with_version",
+        receiver: ReceiverContext::Relation,
+        effect: EffectClass::DbRead,
+        chain: ChainKind::Terminal,
+        return_kind: Some(ReturnKind::Str),
+    },
     CatalogedMethod {
         name: "pluck",
         receiver: ReceiverContext::Relation,
@@ -1773,6 +1850,20 @@ pub const AR_CATALOG: &[CatalogedMethod] = &[
     },
     CatalogedMethod {
         name: "find_or_create_by!",
+        receiver: ReceiverContext::Relation,
+        effect: EffectClass::DbWrite,
+        chain: ChainKind::NotApplicable,
+        return_kind: Some(ReturnKind::SelfType),
+    },
+    CatalogedMethod {
+        name: "create_or_find_by",
+        receiver: ReceiverContext::Relation,
+        effect: EffectClass::DbWrite,
+        chain: ChainKind::NotApplicable,
+        return_kind: Some(ReturnKind::SelfType),
+    },
+    CatalogedMethod {
+        name: "create_or_find_by!",
         receiver: ReceiverContext::Relation,
         effect: EffectClass::DbWrite,
         chain: ChainKind::NotApplicable,
@@ -1892,6 +1983,36 @@ pub(crate) fn is_relation_builder_name(name: &str) -> bool {
         saw_builder = true;
     }
     saw_builder
+}
+
+/// Counted `first(n)` / `last(n)` on a relation: one positional argument
+/// and no block. The runtime spells these `first_n` / `last_n` because
+/// one method cannot return both a record and an Array.
+///
+/// The name is a catalog terminal on both the class and the relation,
+/// and [`is_relation_builder_name`] rejects it. `take(n)` is the same
+/// terminal shape and stays `take` — this predicate does not rename it.
+/// Enumerable `Array#first(n)` and `String#split.last(n)` share the
+/// call shape; a caller renames only after it has proved a relation.
+pub(crate) fn counted_relation_terminal(
+    name: &str,
+    argc: usize,
+    has_block: bool,
+) -> Option<&'static str> {
+    if argc != 1 || has_block || is_relation_builder_name(name) {
+        return None;
+    }
+    let runtime = match name {
+        "first" => "first_n",
+        "last" => "last_n",
+        _ => return None,
+    };
+    let class = lookup(name, ReceiverContext::Class)?;
+    let relation = lookup(name, ReceiverContext::Relation)?;
+    if class.chain != ChainKind::Terminal || relation.chain != ChainKind::Terminal {
+        return None;
+    }
+    Some(runtime)
 }
 
 /// True when the Relation-context entry for `name` is a Builder.
