@@ -4,6 +4,19 @@ enum RhString {
     // Ruby `to_s` semantics for untyped values: nil → "", optionals
     // unwrap (recursively — `Any` can box nested optionals, which
     // String(describing:)/interpolation would render as "Optional(…)").
+    // Ruby's String#[](index): a one-character String, nil past the end
+    static func at(_ s: String, _ index: Int) -> String? {
+        let chars = Array(s)
+        let i = index < 0 ? chars.count + index : index
+        return i < 0 || i >= chars.count ? nil : String(chars[i])
+    }
+
+    // Ruby's Array#[](start, length): nil past the end, clamped otherwise
+    static func listSlice<T>(_ list: [T], _ start: Int, _ length: Int) -> [T]? {
+        if start < 0 || start > list.count || length < 0 { return nil }
+        return Array(list[start..<min(start + length, list.count)])
+    }
+
     static func s(_ x: Any?) -> String {
         guard let x = x else { return "" }
         let m = Mirror(reflecting: x)
