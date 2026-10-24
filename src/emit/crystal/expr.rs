@@ -813,6 +813,25 @@ fn emit_bool_op(
         BoolOpKind::Or => "||",
         BoolOpKind::And => "&&",
     };
+    // Not the empty literal's own default: `x || {}` answers x's type, which a `{} of String => String` would widen
+    if matches!(op, BoolOpKind::Or) {
+        let left_ty = match &left.ty {
+            Some(Ty::Union { variants }) => variants.iter().find(|v| !matches!(v, Ty::Nil)).cloned(),
+            other => other.clone(),
+        };
+        let empty = match (&*right.node, &left_ty) {
+            (ExprNode::Hash { entries, .. }, Some(Ty::Hash { key, value })) if entries.is_empty() && !key.is_open() && !value.is_open() => {
+                Some(format!("{{}} of {} => {}", super::ty::crystal_ty(key), super::ty::crystal_ty(value)))
+            }
+            (ExprNode::Array { elements, .. }, Some(Ty::Array { elem })) if elements.is_empty() && !elem.is_open() => {
+                Some(format!("[] of {}", super::ty::crystal_ty(elem)))
+            }
+            _ => None,
+        };
+        if let Some(empty) = empty {
+            return format!("{} {op_s} {empty}", emit_expr(left));
+        }
+    }
     // Hash#[] safety bridge for `||`-default idiom: Ruby's
     // `hash[k] || default` returns the default for missing keys
     // because Hash#[] returns nil there. Crystal's strict Hash#[]
