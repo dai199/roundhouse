@@ -266,13 +266,13 @@ pub fn emit_library_class(lc: &LibraryClass) -> String {
     // RuntimeException. A `super(args)` inside `initialize` becomes the
     // supertype constructor call in the header.
     let parent_name = lc.parent.as_ref().map(|p| {
-        let last = type_name(p.0.as_str());
-        match last.as_str() {
-            "StandardError" | "RuntimeError" => "RuntimeException".to_string(),
-            other => other.to_string(),
-        }
+        // Not a second table: a raise and a superclass name the same Ruby class, so they map alike
+        super::expr::kotlin_exception_class(&type_name(p.0.as_str()))
     });
     let super_args = init.and_then(|m| find_super_args(&m.body));
+    // Not the implicit no-arg constructor: `raise X, "message"` builds an exception subclass with its message
+    let message_ctor = init.is_none() && parent_name.as_deref().is_some_and(|p| p.ends_with("Exception"));
+    let super_args = if message_ctor { Some(vec!["message".to_string()]) } else { super_args };
     let parent_clause = match (&parent_name, &super_args) {
         (Some(pn), Some(args)) => format!(" : {pn}({})", args.join(", ")),
         (Some(pn), None) => format!(" : {pn}()"),
@@ -312,6 +312,7 @@ pub fn emit_library_class(lc: &LibraryClass) -> String {
         Some(m) => {
             format!("open class {class_name}({}){parent_clause}", method_params(m).join(", "))
         }
+        None if message_ctor => format!("open class {class_name}(message: String? = null){parent_clause}"),
         None => format!("open class {class_name}{parent_clause}"),
     };
     out.push_str(&header);
@@ -831,9 +832,11 @@ fn emit_method(m: &MethodDef, modifier: &str) -> String {
     }
 
     // Return type.
+    // Not Unit for a method without a signature: an app method's answer is its body's type
     let ret_ty = match m.signature.as_ref() {
         Some(Ty::Fn { ret, .. }) => Some((**ret).clone()),
-        _ => None,
+        _ if m.name.as_str() == "initialize" => None,
+        _ => m.body.ty.clone().filter(|t| !t.is_open()),
     };
     let returns_value = !force_unit && matches!(&ret_ty, Some(t) if !matches!(t, Ty::Nil));
     let ret_clause = if force_unit {
