@@ -1283,8 +1283,9 @@ jobs:
         run: |
           set -x
           sudo sysctl -w kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0
-          sudo apt-get install -y -q linux-tools-common "linux-tools-$(uname -r)" >/dev/null || sudo apt-get install -y -q linux-tools-azure >/dev/null
-          PERF=$(ls /usr/lib/linux-tools/*/perf | head -1)
+          sudo apt-get install -y -q linux-tools-common linux-tools-generic >/dev/null
+          PERF=$(ls /usr/lib/linux-tools/*/perf /usr/lib/linux-tools-*/perf 2>/dev/null | head -1)
+          "$PERF" --version
           cd build/campfire-compare-spinel
           FLAGS=$(spin flags | sed -E 's/--link [^ ]+//g')
           echo "flags: $FLAGS"
