@@ -1228,7 +1228,7 @@ jobs:
     if: ${{ !cancelled() && contains(fromJSON(needs.plan.outputs.jobs), 'campfire-spinel-build') && needs.build-roundhouse.outputs.roundhouse-bin-artifact-id != '' && needs.spinel-build.outputs.artifact-id != '' }}
     runs-on: ubuntu-latest
     # 60m: apt alone can take 20m; fetch 5m + emit/build 25m still need room.
-    timeout-minutes: 85
+    timeout-minutes: 170
     continue-on-error: true
     outputs:
       artifact-id: ${{ steps.binary.outputs.artifact-id }}
@@ -1279,21 +1279,24 @@ jobs:
           time SP_TIMING=1 make -C build/campfire-compare-spinel build 2>&1 | tee campfire-build.log
           tar -czf campfire-compare-spinel.tar.gz -C build campfire-compare-spinel
       - name: A/B the Spinel frontend on campfire (measurement only)
-        timeout-minutes: 75
+        timeout-minutes: 120
         run: |
           set -x
-          git clone -q https://github.com/dai199/spinel /tmp/sp-new
-          git -C /tmp/sp-new checkout -q pivs-rename-spare
-          git clone -q /tmp/sp-new /tmp/sp-base
+          git clone -q https://github.com/dai199/spinel /tmp/sp-rv
+          git -C /tmp/sp-rv checkout -q pivs-rename-spare
+          git clone -q /tmp/sp-rv /tmp/sp-base
           git -C /tmp/sp-base checkout -q pivs-rename-spare~1
-          for d in /tmp/sp-base /tmp/sp-new; do (make -C $d deps >/dev/null && make -C $d -j4 all >/dev/null) || exit 1; git -C $d log --oneline -1; done
+          git clone -q /tmp/sp-rv /tmp/sp-cp
+          git -C /tmp/sp-cp fetch -q https://github.com/dai199/spinel const-path-toplevel-memo
+          git -C /tmp/sp-cp checkout -q FETCH_HEAD
+          for d in /tmp/sp-base /tmp/sp-rv /tmp/sp-cp; do (make -C $d deps >/dev/null && make -C $d -j4 all >/dev/null) || exit 1; git -C $d log --oneline -1; done
           cd build/campfire-compare-spinel
           FLAGS=$(spin flags 2>/dev/null | sed -E 's/--link [^ ]+//g')
           mkdir -p /tmp/prof
-          for v in base new base new; do
+          for v in base rv cp base rv cp; do
             /usr/bin/time -f "$v wall=%e user=%U maxrss_kb=%M" env SP_TIMING=1 /tmp/sp-$v/bin/spinel $FLAGS main.rb -c -o /tmp/campfire-$v.c 2>&1 | grep -E "spinel-timing: phase=(analysis|cg_methods|codegen_program) |wall=" | tee -a /tmp/prof/ab.txt
           done
-          cmp /tmp/campfire-base.c /tmp/campfire-new.c && echo "generated C identical" | tee -a /tmp/prof/ab.txt
+          for v in rv cp; do cmp <(sed -E 's#/tmp/sp-[a-z]+/#/tmp/sp-X/#g' /tmp/campfire-base.c) <(sed -E 's#/tmp/sp-[a-z]+/#/tmp/sp-X/#g' /tmp/campfire-$v.c) && echo "$v: generated C identical" | tee -a /tmp/prof/ab.txt; done
       - uses: actions/upload-artifact@v7
         if: always()
         with:
