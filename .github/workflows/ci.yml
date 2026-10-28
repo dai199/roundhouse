@@ -1284,7 +1284,8 @@ jobs:
           set -x
           sudo sysctl -w kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0
           sudo apt-get install -y -q linux-tools-common linux-tools-generic >/dev/null
-          PERF=$(ls /usr/lib/linux-tools/*/perf /usr/lib/linux-tools-*/perf 2>/dev/null | head -1)
+          PERF=$(find /usr/lib -path '*linux-tools*' -name perf -type f 2>/dev/null | head -1)
+          [ -n "$PERF" ] || { dpkg -L linux-tools-generic | head -20; find / -name perf -type f 2>/dev/null | head; exit 1; }
           "$PERF" --version
           cd build/campfire-compare-spinel
           FLAGS=$(spin flags | sed -E 's/--link [^ ]+//g')
