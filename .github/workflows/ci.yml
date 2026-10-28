@@ -1273,9 +1273,10 @@ jobs:
         run: |
           set -o pipefail
           test -x "$ROUNDHOUSE_BIN"
-          "$ROUNDHOUSE_BIN" --target spinel /tmp/campfire \
+          time "$ROUNDHOUSE_BIN" --target spinel /tmp/campfire \
             -o build/campfire-compare-spinel --allow-unsupported 2>&1 | tee campfire-emit.log
-          make -C build/campfire-compare-spinel build 2>&1 | tee campfire-build.log
+          wc -l build/campfire-compare-spinel/main.rb; find build/campfire-compare-spinel/app build/campfire-compare-spinel/runtime build/campfire-compare-spinel/config -name '*.rb' | xargs cat | wc -l
+          time SP_TIMING=1 make -C build/campfire-compare-spinel build 2>&1 | tee campfire-build.log
           tar -czf campfire-compare-spinel.tar.gz -C build campfire-compare-spinel
       # Keep the C from the failed invocation, not a second compiler run.
       # Logs and inputs are still useful if emission failed before any C existed.
