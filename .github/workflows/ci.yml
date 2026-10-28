@@ -1278,6 +1278,27 @@ jobs:
           wc -l build/campfire-compare-spinel/main.rb; find build/campfire-compare-spinel/app build/campfire-compare-spinel/runtime build/campfire-compare-spinel/config -name '*.rb' | xargs cat | wc -l
           time SP_TIMING=1 make -C build/campfire-compare-spinel build 2>&1 | tee campfire-build.log
           tar -czf campfire-compare-spinel.tar.gz -C build campfire-compare-spinel
+      - name: Profile the Spinel frontend on campfire (measurement only)
+        timeout-minutes: 40
+        run: |
+          set -x
+          sudo sysctl -w kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0
+          sudo apt-get install -y -q linux-tools-common "linux-tools-$(uname -r)" >/dev/null || sudo apt-get install -y -q linux-tools-azure >/dev/null
+          PERF=$(ls /usr/lib/linux-tools/*/perf | head -1)
+          cd build/campfire-compare-spinel
+          FLAGS=$(spin flags | sed -E 's/--link [^ ]+//g')
+          echo "flags: $FLAGS"
+          SP_TIMING=1 "$PERF" record -F 49 --call-graph dwarf,8192 -o /tmp/perf.data -- spinel $FLAGS main.rb -S -o /tmp/campfire.c 2>&1 | grep -E "spinel-timing: (phase|cg_method)" || true
+          mkdir -p /tmp/prof
+          "$PERF" report -i /tmp/perf.data --no-children --stdio --percent-limit 0.3 -g none 2>/dev/null | head -150 > /tmp/prof/flat.txt
+          "$PERF" report -i /tmp/perf.data --children --stdio --percent-limit 2 -g caller,0.5,callee --max-stack 30 2>/dev/null | head -3000 > /tmp/prof/children.txt
+          ls -la /tmp/campfire.c; xz -T0 -6 -c /tmp/campfire.c > /tmp/prof/campfire.c.xz
+          head -60 /tmp/prof/flat.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: campfire-spinel-profile
+          path: /tmp/prof
+          retention-days: 5
       # Keep the C from the failed invocation, not a second compiler run.
       # Logs and inputs are still useful if emission failed before any C existed.
       - name: Capture Campfire compiler failure
