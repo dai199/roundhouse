@@ -1291,8 +1291,8 @@ jobs:
           cd build/campfire-compare-spinel
           FLAGS=$(spin flags | sed -E 's/--link [^ ]+//g')
           echo "flags: $FLAGS"
-          SP_TIMING=1 "$PERF" record -F 49 --call-graph dwarf,8192 -o /tmp/perf.data -- spinel $FLAGS main.rb -c -o /tmp/campfire.c 2>&1 | grep -E "spinel-timing: (phase|cg_method)" || true
-          mkdir -p /tmp/prof
+          SP_TIMING=1 "$PERF" record -F 49 --call-graph dwarf,8192 -o /tmp/perf.data -- spinel $FLAGS main.rb -c -o /tmp/campfire.c 2>&1 | grep "spinel-timing" > /tmp/prof-timing.txt || true
+          mkdir -p /tmp/prof; mv /tmp/prof-timing.txt /tmp/prof/timing.txt; grep -v cg_method /tmp/prof/timing.txt
           "$PERF" report -i /tmp/perf.data --no-children --stdio --percent-limit 0.3 -g none 2>/dev/null | head -150 > /tmp/prof/flat.txt
           "$PERF" report -i /tmp/perf.data --children --stdio --percent-limit 2 -g caller,0.5,callee --max-stack 30 2>/dev/null | head -3000 > /tmp/prof/children.txt
           ls -la /tmp/campfire.c; xz -T0 -6 -c /tmp/campfire.c > /tmp/prof/campfire.c.xz
