@@ -87,6 +87,10 @@ fn record_return_overridden(
 pub(super) fn emit_library_class_decls(app: &App) -> Vec<EmittedFile> {
     let _indexes = install_lookup_indexes(app);
     let mut lcs: Vec<LibraryClass> = app.library_classes.clone();
+    // An alias of an ancestor's method is the native `alias_method` here.
+    if super::expr::carries_body_statements() {
+        crate::ingest::inherited_alias::drop_replayed_copies(&mut lcs);
+    }
     // A block-taking tag helper gains a `<name>_into(io, …)` variant
     // that writes around a yield into the caller's buffer; the view
     // emit points its appends at it (`lower::tag_block_passing`).
@@ -904,7 +908,8 @@ pub(super) fn apply_extras_facades(files: &mut [(String, String)], app: &App) {
                 // consumer read roundhouse's own inference instead of the
                 // hand-written contract sitting beside the façade.
                 //
-                // What that cost, end to end: the contract declares
+                // What that cost, end to end: the (since retired) Sponge
+                // contract declared
                 // `OpenSSL::RandomSource.random_bytes: (Integer) -> String`,
                 // and without it that call typed untyped, which widened
                 // `str` in `Utils.random_str`, which made
@@ -982,10 +987,12 @@ pub(crate) fn apply_library_partial_render_lowering(lcs: &mut [LibraryClass], ap
     if contracts.is_empty() {
         return;
     }
+    let helper_modules = helper_module_ids(app);
     for lc in lcs.iter_mut() {
+        let in_helper = helper_modules.contains(&lc.name);
         for m in &mut lc.methods {
             let in_scope: Vec<Symbol> = m.params.iter().map(|p| p.name.clone()).collect();
-            rewrite_library_partial_render(&mut m.body, &contracts, &in_scope);
+            rewrite_library_partial_render(&mut m.body, &contracts, &in_scope, in_helper);
         }
     }
 }
@@ -1007,22 +1014,13 @@ fn hash_locals(arg: Option<&Expr>) -> Vec<(Symbol, Expr)> {
         .collect()
 }
 
-fn rewrite_library_partial_render(
-    expr: &mut Expr,
-    contracts: &crate::det::HashMap<
-        (String, String),
-        crate::lower::view_to_library::PartialCallContract,
-    >,
-    in_scope: &[Symbol],
-) {
+fn library_partial_render(expr: &Expr) -> Option<(String, Vec<(Symbol, Expr)>)> {
     use crate::expr::Literal;
-    expr.node
-        .for_each_child_mut(&mut |c| rewrite_library_partial_render(c, contracts, in_scope));
-    let ExprNode::Send { recv: None, method, args, .. } = &*expr.node else { return };
+    let ExprNode::Send { recv: None, method, args, .. } = &*expr.node else { return None };
     if method.as_str() != "render" && method.as_str() != "render_to_string" {
-        return;
+        return None;
     }
-    let Some(first) = args.first() else { return };
+    let first = args.first()?;
     let mut partial: Option<String> = None;
     let mut locals: Vec<(Symbol, Expr)> = Vec::new();
     match &*first.node {
@@ -1056,13 +1054,34 @@ fn rewrite_library_partial_render(
                 }
             }
         }
-        _ => return,
+        _ => return None,
     }
-    let Some(pname) = partial else { return };
-    let Some((dir, base)) = pname.rsplit_once('/') else { return };
-    let module_camel = crate::naming::camelize(&crate::naming::snake_case(dir));
-    let stem = base.trim_start_matches('_').to_string();
-    let Some(contract) = contracts.get(&(module_camel.clone(), stem.clone())) else { return };
+    Some((partial?, locals))
+}
+
+fn library_partial_key(pname: &str) -> Option<(String, String)> {
+    let (dir, base) = pname.rsplit_once('/')?;
+    Some((
+        crate::naming::camelize_path(&crate::naming::snake_case(dir)),
+        base.trim_start_matches('_').to_string(),
+    ))
+}
+
+fn rewrite_library_partial_render(
+    expr: &mut Expr,
+    contracts: &crate::det::HashMap<
+        (String, String),
+        crate::lower::view_to_library::PartialCallContract,
+    >,
+    in_scope: &[Symbol],
+    in_helper: bool,
+) {
+    use crate::expr::Literal;
+    expr.node
+        .for_each_child_mut(&mut |c| rewrite_library_partial_render(c, contracts, in_scope, in_helper));
+    let Some((pname, locals)) = library_partial_render(expr) else { return };
+    let Some((module_camel, stem)) = library_partial_key(&pname) else { return };
+    let Some(contract) = contracts.get(&(module_camel.clone(), stem)) else { return };
     let span = expr.span;
     let nil = || sp_expr(ExprNode::Lit { value: Literal::Nil });
     let locals_lookup = |name: &str| -> Option<Expr> {
@@ -1090,7 +1109,9 @@ fn rewrite_library_partial_render(
     let mut view_args: Vec<Expr> = Vec::new();
     view_args.push(lookup(&contract.record).unwrap_or_else(nil));
     for n in &contract.closure {
-        view_args.push(lookup(n).unwrap_or_else(nil));
+        // Not the helper's same-named param: the partial's ivar is the rendering template's, which `rewrite_helper_ivars` reaches.
+        let ivar = in_helper.then(|| Expr::new(span, ExprNode::Ivar { name: Symbol::from(n.as_str()) }));
+        view_args.push(locals_lookup(n).or(ivar).or_else(|| param_lookup(n)).unwrap_or_else(nil));
     }
     view_args.extend(contract.extras_args(
         locals_lookup,
@@ -1105,7 +1126,7 @@ fn rewrite_library_partial_render(
             recv: Some(sp_expr(ExprNode::Const {
                 path: vec![Symbol::from("Views"), Symbol::from(module_camel)],
             })),
-            method: crate::lower::view::view_method_name(&stem),
+            method: contract.method.clone(),
             args: view_args,
             block: None,
             parenthesized: true,
@@ -1164,7 +1185,25 @@ pub(crate) fn emit_relation_scope_delegates(app: &App) -> Option<EmittedFile> {
         Vec<(&crate::ident::ClassId, &[crate::dialect::Param])>,
     > = Default::default();
     for model in &app.models {
-        let Some(per) = scopes.get(&model.name) else { continue };
+        // The model's own scopes, then each ancestor's it does not declare
+        // itself: an `ApplicationRecord` scope reached on `Article`'s
+        // relation calls `Article.__scope_…`, which Ruby resolves to the
+        // ancestor's entry.
+        let mut chain: Vec<&crate::ident::ClassId> = Vec::new();
+        let mut current = Some(&model.name);
+        while let Some(id) = current.filter(|id| chain.len() < 32 && !chain.contains(id)) {
+            chain.push(id);
+            current = app.models.iter().find(|m| &m.name == id).and_then(|m| m.parent.as_ref());
+        }
+        let mut per: std::collections::HashMap<&Symbol, &Vec<crate::dialect::Param>> = Default::default();
+        for owner in chain {
+            for (n, params) in scopes.get(owner).into_iter().flatten() {
+                per.entry(n).or_insert(params);
+            }
+        }
+        if per.is_empty() {
+            continue;
+        }
         // The registry carries the SYNTHESIZED preload scopes too (it
         // must — the scope-body rewriter reads it to thread `__rel`
         // through a bare `with_attached_attachment`). They are handled
@@ -1184,7 +1223,7 @@ pub(crate) fn emit_relation_scope_delegates(app: &App) -> Option<EmittedFile> {
                 .chain(crate::lower::attached::preload_scope_names(model))
                 .map(|n| n.as_str().to_string())
                 .collect();
-        let mut names: Vec<&Symbol> = per.keys().collect();
+        let mut names: Vec<&Symbol> = per.keys().copied().collect();
         names.sort_by_key(|n| n.as_str());
         for n in names {
             if RELATION_BUILTINS.contains(&n.as_str()) || synthesized.contains(n.as_str()) {
@@ -3304,9 +3343,16 @@ pub(crate) fn apply_helper_lowering(lcs: &mut [LibraryClass], app: &App) {
         // Declared names per side (a helper module's methods are all about to
         // become module functions, so for it they are one set): an instance
         // body is not shadowed by a `def self.x`, nor a class body by `def x`.
+        // A template's own method is not one of them: a template is no
+        // method a bare call in it could reach (its renders are already
+        // `Views::…` calls), so a bare call naming it is the helper of
+        // that name — a renamed pair partial (`show_partial`) included.
+        let is_template =
+            lc.name.0.as_str() == "Views" || lc.name.0.as_str().starts_with("Views::");
         let declared_on = |class_side: bool| -> crate::det::HashSet<Symbol> {
             lc.methods
                 .iter()
+                .filter(|_| !is_template)
                 .filter(|m| {
                     is_helper_module
                         || (m.receiver == MethodReceiver::Class) == class_side
@@ -3469,13 +3515,9 @@ fn is_base_controller(lc: &LibraryClass) -> bool {
 /// reader this pass synthesizes would collide with it, and the app's
 /// own method is the one that should win.
 fn helper_read_ivars(app: &App) -> std::collections::BTreeSet<Symbol> {
-    let helper_modules: BTreeSet<ClassId> = app
-        .helper_method_index
-        .values()
-        .filter(|id| !app.controllers.iter().any(|c| &c.name == *id))
-        .cloned()
-        .collect();
+    let helper_modules = helper_module_ids(app);
     let mut out = std::collections::BTreeSet::new();
+    let mut rendered: Vec<(String, String)> = Vec::new();
     for lc in &app.library_classes {
         if !helper_modules.contains(&lc.name) {
             continue;
@@ -3485,6 +3527,19 @@ fn helper_read_ivars(app: &App) -> std::collections::BTreeSet<Symbol> {
                 collect_ivar_reads(default, &mut out);
             }
             collect_ivar_reads(&m.body, &mut out);
+            collect_library_partial_keys(&m.body, &mut rendered);
+        }
+    }
+    if !rendered.is_empty() {
+        let contracts = crate::lower::view_to_library::partial_call_contracts(
+            &app.views,
+            &app.controllers,
+            &app.library_classes,
+        );
+        for key in &rendered {
+            if let Some(contract) = contracts.get(key) {
+                out.extend(contract.closure.iter().map(|n| Symbol::from(n.as_str())));
+            }
         }
     }
     let controller_methods: crate::det::HashSet<Symbol> = app
@@ -3500,6 +3555,21 @@ fn helper_read_ivars(app: &App) -> std::collections::BTreeSet<Symbol> {
         .collect();
     out.retain(|n| !controller_methods.contains(n));
     out
+}
+
+fn helper_module_ids(app: &App) -> BTreeSet<ClassId> {
+    app.helper_method_index
+        .values()
+        .filter(|id| !app.controllers.iter().any(|c| &c.name == *id))
+        .cloned()
+        .collect()
+}
+
+fn collect_library_partial_keys(e: &Expr, out: &mut Vec<(String, String)>) {
+    if let Some(key) = library_partial_render(e).and_then(|(name, _)| library_partial_key(&name)) {
+        out.push(key);
+    }
+    e.node.for_each_child(&mut |c| collect_library_partial_keys(c, out));
 }
 
 fn collect_ivar_reads(e: &Expr, out: &mut std::collections::BTreeSet<Symbol>) {
@@ -4383,6 +4453,19 @@ fn rewrite_helper_calls(
             view_visible,
         )
     });
+
+    // Not left on `self` in a view or helper module: a helper reached as `self.x` is the bare `x` below, and the module function has no such method. A same-named param keeps `self`, which a bare call would read instead.
+    if let ExprNode::Send { recv: Some(r), method, .. } = &*expr.node {
+        if rewrite_request
+            && matches!(&*r.node, ExprNode::SelfRef)
+            && (index.contains_key(method) || view_visible.contains(method))
+            && !own_methods.contains(method)
+            && !own_params.contains(method)
+        {
+            let ExprNode::Send { recv, .. } = &mut *expr.node else { unreachable!() };
+            *recv = None;
+        }
+    }
 
     // Destructive `<lvalue>.<m>!(args)` on a frozen string raises under
     // spinel (frozen literals) — lobsters' link_to_different_page does
@@ -5486,7 +5569,7 @@ pub(crate) fn apply_duration_lowering(lcs: &mut [LibraryClass], app: &App) {
     let temporal_predicates = !crate::lower::duration::app_defines_temporal_predicates(app);
     for lc in lcs.iter_mut() {
         for m in &mut lc.methods {
-            crate::lower::duration::apply_duration_rewrites(&mut m.body, temporal_predicates);
+            crate::lower::duration::apply_duration_rewrites(&mut m.body, temporal_predicates, true);
         }
     }
 }
@@ -8199,6 +8282,19 @@ fn emit_library_class_decl_inner(
         Include(&'a ClassId),
         Method(&'a MethodDef),
     }
+    // A model's body is its own file's. What a Concern's `included` block
+    // runs there (a seed, a replayed call) carries the Concern's file, so
+    // its offset says nothing about where it runs: at the `include`, ahead
+    // of the model's own statements, in the order the splice gave it.
+    let model_file = app
+        .models
+        .iter()
+        .find(|m| m.name == lc.name && !m.span.is_synthetic())
+        .map(|m| m.span.file);
+    let key = |span: &crate::span::Span| match model_file {
+        Some(file) if span.file != file => 0,
+        _ => span.start,
+    };
     let mut body: Vec<_> = eager.iter().map(|&i| {
         (lc.constants[i].1.span.start, BodyItem::Constant(i, &lc.constants[i].1))
     }).collect();
@@ -8211,18 +8307,18 @@ fn emit_library_class_decl_inner(
                 | ExprNode::OpAssign { target: LValue::Ivar { .. }, .. }
         ))
     }).map(|init| {
-        (init.span.start, BodyItem::Initializer(init))
+        (key(&init.span), BodyItem::Initializer(init))
     }));
     // Where the source has them: a method defined before the call is the macro's to override, one after it overrides the macro's.
     if ordered_body {
-        body.extend(replayed_in_place.iter().map(|call| (call.span.start, BodyItem::Initializer(call))));
+        body.extend(replayed_in_place.iter().map(|call| (key(&call.span), BodyItem::Initializer(call))));
     }
     body.extend(constant_calls.iter().filter(|call| {
         !(ordered_body && replayed_in_place.iter().any(|kept| std::ptr::eq(*kept, **call)))
     }).map(|call| (call.span.start, BodyItem::Call(call))));
     // Concern-spliced and other foreign-file methods keep foreign
     // `name_span` offsets; interleave only same-file declarations.
-    let body_file = lc.class_ivar_initializers.iter().find_map(|init| {
+    let body_file = model_file.or_else(|| lc.class_ivar_initializers.iter().find_map(|init| {
         (!init.span.is_synthetic()
             && matches!(
                 &*init.node,
@@ -8230,7 +8326,7 @@ fn emit_library_class_decl_inner(
                     | ExprNode::OpAssign { target: LValue::Ivar { .. }, .. }
             ))
         .then_some(init.span.file)
-    }).or_else(|| replayed_in_place.first().map(|call| call.span.file))
+    })).or_else(|| replayed_in_place.first().map(|call| call.span.file))
         .or_else(|| constant_calls.first().map(|call| call.span.file));
     let same_file_method = |m: &MethodDef| {
         !ordered_body
@@ -8757,7 +8853,12 @@ fn emit_library_class_decl_inner(
             .filter(|call| !is_preserved_external_include(call) && !in_body(call))
             .collect()
     } else {
-        let own = app_extension_calls(lc, app, classes);
+        let mut picked = app_extension_calls(lc, app, classes);
+        picked.extend(gem_include_macro_calls(lc));
+        // Source order, each call once: `span_method` prepends its wrapper,
+        // and an app macro written after it may read the ancestors.
+        let own: Vec<&Expr> =
+            lc.unknown_calls.iter().filter(|call| picked.iter().any(|p| std::ptr::eq(*p, *call))).collect();
         let mut replayed = own.clone();
         replayed.retain(|call| !in_body(call));
         for call in &lc.unknown_calls {
@@ -8770,7 +8871,8 @@ fn emit_library_class_decl_inner(
             let listed = own.iter().any(|c| std::ptr::eq(*c, call))
                 || is_preserved_external_include(call)
                 || crate::lower::job_payload::modelled_class_body_call(app, lc, call)
-                || crate::lower::sti_scope::models_class_body_setting(app, lc, call);
+                || crate::lower::sti_scope::models_class_body_setting(app, lc, call)
+                || crate::ingest::inherited_alias::carried_by_copy(lc, call);
             if listed {
                 continue;
             }
@@ -9638,6 +9740,25 @@ fn app_extension_calls<'a>(lc: &'a LibraryClass, app: &App, classes: &'a [Librar
         }
     }
     out
+}
+
+/// Class-body macros a module of a gem the Ruby family ships gives its
+/// includer (`include ElasticAPM::SpanHelpers`, then `span_method :call`).
+/// The gem is loaded on this tree, so the call is what Ruby runs. A target
+/// that refuses the gem drops the include first, so nothing replays there.
+const GEM_INCLUDE_MACROS: &[(&str, &[&str])] =
+    &[("ElasticAPM::SpanHelpers", &["span_method", "span_class_method"])];
+
+fn gem_include_macro_calls(lc: &LibraryClass) -> Vec<&Expr> {
+    let macros: Vec<&str> = GEM_INCLUDE_MACROS
+        .iter()
+        .filter(|(module, _)| lc.includes.iter().any(|id| id.0.as_str() == *module))
+        .flat_map(|(_, macros)| macros.iter().copied())
+        .collect();
+    lc.unknown_calls
+        .iter()
+        .filter(|call| matches!(&*call.node, ExprNode::Send { recv: None, method, .. } if macros.contains(&method.as_str())))
+        .collect()
 }
 
 /// A receiverless class-body call that assigns a constant inside its block,

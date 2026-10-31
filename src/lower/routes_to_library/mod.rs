@@ -151,7 +151,7 @@ fn build_route_new(r: &FlatRoute, class_id: &ClassId, route_ty: &Ty) -> Expr {
     let controller_sym = controller_symbol(r.controller.0.as_str());
     let mut args = vec![
         lit_str(verb_str.to_string()),
-        lit_str(r.path.clone()),
+        lit_str(crate::lower::segment_pattern::dispatch_path(&r.path, &r.seg_patterns)),
         lit_sym(Symbol::from(controller_sym)),
         lit_sym(r.action.clone()),
     ];
@@ -349,7 +349,17 @@ pub fn lower_routes_to_library_functions(app: &App) -> Vec<LibraryFunction> {
     // `direct :name do … end` helpers — not routes, so they never reach
     // `flat`; they ride here because they live in the same module and
     // their `route_for` bodies need the flattened table to resolve.
-    funcs.extend(direct::lower_direct_helpers(&module_path, app, &flat));
+    // A `route_for` argument meets its target's signature the way any
+    // other call site does, so the generated helpers' parameter types go
+    // with it.
+    let helper_params: crate::det::HashMap<String, Vec<Ty>> = funcs
+        .iter()
+        .filter_map(|f| match &f.signature {
+            Some(Ty::Fn { params, .. }) => Some((f.name.as_str().to_string(), params.iter().map(|p| (*p.ty).clone()).collect())),
+            _ => None,
+        })
+        .collect();
+    funcs.extend(direct::lower_direct_helpers(&module_path, app, &flat, &helper_params));
     // The `**hash` half of the query string. `query_keys` above covers
     // every key a call site NAMES; a call site that splats a runtime
     // Hash names none, and there is nothing static to read them off —

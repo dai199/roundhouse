@@ -453,6 +453,7 @@ pub(super) fn ingest_model_with_enum_constants(
         parent,
         parent_span,
         sti_subclass_names: Vec::new(),
+        select_aliases: Vec::new(),
         i18n: Default::default(),
         table: TableRef(Symbol::from(table_name)),
         primary_key,
@@ -3637,6 +3638,20 @@ fn parse_scope(
                     default,
                 ));
             }
+        }
+        // A required parameter after the optional ones (`->(col = "price",
+        // op = ">=", amount)`, Prism's `posts`) binds the LAST argument.
+        // The class method this scope becomes has no slot for it (the
+        // relation parameter follows the optionals), and dropping it left
+        // the body reading an unbound name while the caller's last
+        // argument landed in an optional. Refuse rather than mis-bind.
+        if pn.posts().iter().next().is_some() {
+            return Err(IngestError::Unsupported {
+                file: file.into(),
+                message: format!(
+                    "scope :{name}: a required parameter after optional ones is not supported"
+                ),
+            });
         }
         for kw in pn.keywords().iter() {
             if let Some(okw) = kw.as_optional_keyword_parameter_node() {
