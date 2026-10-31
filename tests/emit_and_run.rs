@@ -20561,6 +20561,8 @@ mod namespaced_controller_symbol;
 
 #[path = "emit_and_run/route_format_lookahead.rs"]
 mod route_format_lookahead;
+#[path = "emit_and_run/route_helper_segment_escape.rs"]
+mod route_helper_segment_escape;
 
 #[path = "emit_and_run/route_dot_span.rs"]
 mod route_dot_span;

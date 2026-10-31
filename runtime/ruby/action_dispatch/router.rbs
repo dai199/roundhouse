@@ -152,6 +152,7 @@ module ActionDispatch
     # A decoded capture path-escaped again, as Rails fills a routing
     # redirect's `%{name}`; see the .rb. Byte-oriented after UTF-8 decode.
     def self.escape_path: (String s) -> String
+    def self.escape_segment: (String s) -> String
     def self.printable: () -> String
     def self.path_byte_ok: (Integer b) -> bool
     def self.percent_escape_byte: (Integer b) -> String

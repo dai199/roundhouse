@@ -597,6 +597,38 @@ module ActionDispatch
       out
     end
 
+    # A path param's value in a generated URL, as Rails' route helpers
+    # write it (`Journey::Router::Utils.escape_segment`): the PATH-safe
+    # set of `escape_path` less `/`, so `site_path("a/b")` is `/sites/a%2Fb`.
+    # A value with nothing to escape is answered as it is, which is every
+    # slug and most names.
+    def self.escape_segment(s)
+      bytes = s.bytes
+      i = 0
+      clean = true
+      while i < bytes.length
+        b = bytes[i]
+        if b == 47 || !path_byte_ok(b)
+          clean = false
+          break
+        end
+        i += 1
+      end
+      return s if clean
+      out = ""
+      i = 0
+      while i < bytes.length
+        b = bytes[i]
+        if b != 47 && path_byte_ok(b)
+          out = out + printable[b - 32, 1].to_s
+        else
+          out = out + percent_escape_byte(b)
+        end
+        i += 1
+      end
+      out
+    end
+
     # Printable ASCII, 0x20 to 0x7E in order: the character for byte
     # `code` is `printable[code - 32, 1]`.
     def self.printable
