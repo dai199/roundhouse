@@ -1766,11 +1766,86 @@ jobs:
           retention-days: 1
       - *advisory-result
 
+  # Not a compile per contract test: the shared runtime's analysis was most of
+  # the lane. Collects the run_spinel contracts and builds them in groups;
+  # each shard runs its own case of a group's binary (`emit_and_run::bundle`),
+  # and a contract this did not build compiles in its own test as before.
+  spinel-toolchain-bundles:
+    name: spinel-toolchain-bundles
+    needs: [generate-fixture, spinel-build, spinel-toolchain-build, plan]
+    if: ${{ !cancelled() && contains(fromJSON(needs.plan.outputs.jobs), 'spinel-toolchain') && needs.generate-fixture.result == 'success' && needs.spinel-build.outputs.artifact-id != '' && needs.spinel-toolchain-build.outputs.artifact-id != '' }}
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    env:
+      MAKEFLAGS: "-j4"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: real-blog-fixture
+      - name: Extract fixture
+        run: tar -xzf real-blog.tar.gz
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.spinel-toolchain-build.outputs.artifact-id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/spinel-toolchain
+      - name: Restore spinel_toolchain binaries
+        run: |
+          python3 scripts/ci-spinel-toolchain.py restore \
+            --archive "$RUNNER_TEMP/spinel-toolchain/spinel-toolchain.tar.gz" \
+            --inventory "$RUNNER_TEMP/spinel-toolchain/inventory.json" \
+            --env-file "$RUNNER_TEMP/spinel-toolchain/bins.env"
+          cat "$RUNNER_TEMP/spinel-toolchain/bins.env" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: spinel-dist
+          path: spinel-dist
+      - name: Stage spinel binaries
+        run: |
+          chmod +x spinel-dist/spinel spinel-dist/spin spinel-dist/spinel_rbs_extract
+          echo "$PWD/spinel-dist" >> $GITHUB_PATH
+      - name: Install libsqlite3-dev + libjemalloc-dev
+        timeout-minutes: 8
+        run: |
+          "$GITHUB_WORKSPACE/scripts/ci-apt-install" libsqlite3-dev libjemalloc-dev
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ env.MRI_RUBY }}
+          bundler-cache: true
+          working-directory: ./runtime/spinel/scaffold
+      - name: Collect and build the shared contracts
+        env:
+          RUST_MIN_STACK: "33554432"
+          RH_SPINEL_BUNDLE_COLLECT: ${{ runner.temp }}/bundle-cases
+          RH_SPINEL_BUNDLE_OUT: ${{ runner.temp }}/spinel-bundles
+        run: |
+          start=$(date +%s)
+          # Every test stops at its contract (or before a native build): failures here are expected.
+          timeout 900 "$SPINEL_TOOLCHAIN_BIN" --ignored --test-threads 8 >/dev/null 2>&1 || true
+          echo "collected $(ls "$RH_SPINEL_BUNDLE_COLLECT" 2>/dev/null | wc -l) contracts in $(( $(date +%s) - start ))s"
+          "$SPINEL_TOOLCHAIN_BIN" --ignored --exact spinel_bundle_build --nocapture
+          echo "built in $(( $(date +%s) - start ))s"
+          tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/spinel-bundles.tar.gz" spinel-bundles
+      - name: Upload the shared contracts
+        id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: spinel-bundles
+          overwrite: true
+          path: ${{ runner.temp }}/spinel-bundles.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
   spinel-toolchain:
     name: spinel-toolchain (suite, ${{ matrix.shard }})
     # Tracks matz/spinel master UNPINNED. Advisory unless ci:spinel focus
     # hardens the CORE lane (spinel-advisory=false).
-    needs: [generate-fixture, spinel-build, spinel-toolchain-build, plan]
+    needs: [generate-fixture, spinel-build, spinel-toolchain-build, spinel-toolchain-bundles, plan]
     if: ${{ !cancelled() && contains(fromJSON(needs.plan.outputs.jobs), 'spinel-toolchain') && needs.generate-fixture.result == 'success' && needs.spinel-build.outputs.artifact-id != '' && needs.spinel-toolchain-build.outputs.artifact-id != '' }}
     # Four shards, balanced by `ci-plan.py toolchain-shard` on recorded
     # seconds: a new test lands on the lightest shard instead of growing a
@@ -1843,6 +1918,18 @@ jobs:
           ruby-version: ${{ env.MRI_RUBY }}
           bundler-cache: true
           working-directory: ./runtime/spinel/scaffold
+      - uses: actions/download-artifact@v8
+        if: ${{ needs.spinel-toolchain-bundles.outputs.artifact-id != '' }}
+        continue-on-error: true
+        with:
+          artifact-ids: ${{ needs.spinel-toolchain-bundles.outputs.artifact-id }}
+          path: ${{ runner.temp }}
+      - name: Unpack the shared contracts
+        if: ${{ needs.spinel-toolchain-bundles.outputs.artifact-id != '' }}
+        continue-on-error: true
+        run: |
+          tar -C "$RUNNER_TEMP" -xzf "$RUNNER_TEMP/spinel-bundles.tar.gz"
+          echo "RH_SPINEL_BUNDLE=$RUNNER_TEMP/spinel-bundles" >> "$GITHUB_ENV"
       # One process per test, as many as libtest's threads, so each test's seconds are its own.
       - name: run spinel_toolchain ignored suite (${{ matrix.shard }})
         env:
