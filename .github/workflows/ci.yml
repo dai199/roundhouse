@@ -1831,6 +1831,16 @@ jobs:
         run: |
           chmod +x spinel-dist/spinel spinel-dist/spin spinel-dist/spinel_rbs_extract
           echo "$PWD/spinel-dist" >> $GITHUB_PATH
+          mv spinel-dist/spinel spinel-dist/spinel.real
+          cat > spinel-dist/spinel <<'WRAP'
+          #!/usr/bin/env bash
+          err=$(mktemp)
+          SP_FIXPOINT_LOG=1 "$(dirname "$0")/spinel.real" "$@" 2>"$err"; st=$?
+          grep '^\[fp\]' "$err" | sed "s|^|$PWD :: $* :: |" >> "$RUNNER_TEMP/fp.log"
+          grep -v '^\[fp\]' "$err" >&2; rm -f "$err"; exit $st
+          WRAP
+          chmod +x spinel-dist/spinel
+
       - name: Install libsqlite3-dev + libjemalloc-dev
         timeout-minutes: 8
         # jemalloc for the same reason the emitted README now lists it:
@@ -1859,6 +1869,10 @@ jobs:
       # app entry, HTTP requests to the binary, and the model script
       # compiled natively. Filtered by name, so the ignored test named
       # after an open issue (#163) is not selected.
+      - name: fixpoint census
+        if: always()
+        run: |
+          sort "$RUNNER_TEMP/fp.log" | sed 's|/tmp/[^ ]*|T|' | awk -F' :: ' '{print $3" :: "$2}' | sort | uniq -c | sort -k2 -rn | head -100 || true
       - name: run tiny_api spinel_gate_ --ignored
         if: ${{ !cancelled() && matrix.shard == 3 }}
         env:
