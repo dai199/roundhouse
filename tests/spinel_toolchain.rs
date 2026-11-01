@@ -457,6 +457,9 @@ fn real_blog_spinel_tests_pass() {
     let scratch = scratch_dir("real-blog");
     generate_project(fixture, &scratch);
 
+    if std::env::var_os("RH_SPINEL_BUNDLE_COLLECT").is_some() {
+        panic!("spinel bundle collect: not bundled");
+    }
     let output = Command::new("make")
         .arg("spinel-test")
         .current_dir(&scratch)
