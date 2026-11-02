@@ -8,7 +8,7 @@ tmp="${RUNNER_TEMP:-/tmp}/spinel-framework"
 mkdir -p "$tmp/logs"
 
 args=()
-for suite in $TESTS spinel_bundle; do args+=(--test "$suite"); done
+for suite in $TESTS; do args+=(--test "$suite"); done
 cargo test --no-run --message-format=json "${args[@]}" > "$tmp/build.json" || exit 1
 exe() {
   python3 - "$tmp/build.json" "$1" <<'PY'
@@ -36,20 +36,9 @@ run_suite() {
 export -f exe filter run_suite
 export tmp
 
-# Not a compile per contract: the suites' run_spinel contracts are collected
-# (each test stops at its contract) and built in shared groups first.
 start=$(date +%s)
-for suite in $TESTS; do
-  echo "$suite"
-done | RH_SPINEL_BUNDLE_COLLECT="$tmp/bundle-cases" xargs -P "$(( $(nproc) * 2 ))" -I{} \
-  bash -c 'timeout 90 "$(exe {})" --ignored $(filter {}) >/dev/null 2>&1 || true'
-echo "collected $(ls "$tmp/bundle-cases" 2>/dev/null | wc -l) contracts in $(( $(date +%s) - start ))s"
-RH_SPINEL_BUNDLE_COLLECT="$tmp/bundle-cases" RH_SPINEL_BUNDLE_OUT="$tmp/spinel-bundles" \
-  "$(exe spinel_bundle)" --ignored --exact spinel_bundle_build --nocapture || true
-echo "bundled in $(( $(date +%s) - start ))s"
-export RH_SPINEL_BUNDLE="$tmp/spinel-bundles"
 
-# Not one suite at a time: most now run in seconds; the PostgreSQL one shares a database, so it runs alone.
+# Not one suite at a time: each is mostly one Spinel compile; the PostgreSQL one shares a database, so it runs alone.
 status=0
 parallel=()
 serial=()

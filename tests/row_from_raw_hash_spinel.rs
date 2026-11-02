@@ -79,9 +79,6 @@ puts Article.titles.map { |r| r.title }.join(",")
     )
     .expect("write consumer");
     let compiler = std::env::var("SPINEL").unwrap_or_else(|_| "spinel".into());
-    if std::env::var_os("RH_SPINEL_BUNDLE_COLLECT").is_some() {
-        panic!("spinel bundle collect: not bundled");
-    }
     let out = Command::new(&compiler)
         .args(["--rbs", ".", "--warn-widen", "-c", "contract.rb", "-o", "contract.c"])
         .current_dir(&*emitted)
@@ -115,9 +112,6 @@ puts Article.titles.map { |r| r.title }.join(",")
     }
 
     // The C compiles and the binary answers as Rails does.
-    if std::env::var_os("RH_SPINEL_BUNDLE_COLLECT").is_some() {
-        panic!("spinel bundle collect: not bundled");
-    }
     let built = Command::new(&compiler)
         .args(["--rbs", ".", "contract.rb", "-o", "contract"])
         .current_dir(&*emitted)

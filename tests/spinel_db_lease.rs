@@ -44,9 +44,6 @@ fn a_request_that_raises_releases_its_connection() {
         std::fs::copy(root.join(from), scratch.join(to)).expect("copy");
     }
 
-    if std::env::var_os("RH_SPINEL_BUNDLE_COLLECT").is_some() {
-        panic!("spinel bundle collect: not bundled");
-    }
     let build = Command::new("spinel")
         .args(["driver.rb", "-o", "driver"])
         .current_dir(&scratch)

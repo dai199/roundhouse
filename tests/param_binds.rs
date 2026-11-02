@@ -351,9 +351,6 @@ fn run_script(dir: &std::path::Path, script: &str, native: bool) {
     println!("gate tree: {}", dir.display());
     if native {
         let compiler = std::env::var("SPINEL").unwrap_or_else(|_| "spinel".into());
-        if std::env::var_os("RH_SPINEL_BUNDLE_COLLECT").is_some() {
-            panic!("spinel bundle collect: not bundled");
-        }
         let mut command = Command::new(compiler);
         command
             .args(["bind_gate.rb", "-o", "bind_gate"])
@@ -606,9 +603,6 @@ puts "PASS seeded String-only find/exists adapter boundary and nil guards"
     if target == BuildTarget::Spinel {
         std::fs::write(dir.join("strict_adapter.rb"), script).unwrap();
         let compiler = std::env::var("SPINEL").unwrap_or_else(|_| "spinel".into());
-        if std::env::var_os("RH_SPINEL_BUNDLE_COLLECT").is_some() {
-            panic!("spinel bundle collect: not bundled");
-        }
         let mut command = Command::new(compiler);
         command
             .args(["--rbs", ".", "strict_adapter.rb", "-o", "strict_adapter"])
