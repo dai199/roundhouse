@@ -1095,6 +1095,21 @@ fn report_typescript_error_class(app: &App, target: BuildTarget) {
     }
 }
 
+/// The TypeScript emit writes `include Enumerable` as `extends Enumerable`, a class its runtime has no port of.
+fn report_typescript_enumerable(app: &App, target: BuildTarget) {
+    if !matches!(target, BuildTarget::Typescript | BuildTarget::TypescriptWorker) {
+        return;
+    }
+    for lc in app.library_classes.iter().filter(|lc| lc.origin.is_none() && lc.includes.iter().any(|m| m.0.as_str() == "Enumerable")) {
+        emit::diagnostics::report_unsupported(
+            lc.methods.first().map(|m| m.name_span).unwrap_or(lc.parent_span),
+            target.as_str(),
+            "Enumerable mixin",
+            format!("`{}` includes Enumerable, which the {} runtime does not port", lc.name.0.as_str(), target.as_str()),
+        );
+    }
+}
+
 /// A model's class-body `extend AppModule` and the calls after it to the
 /// module's methods (`ingest::app_extension_calls`) are replayed by the
 /// Ruby family's emit; no other target carries a class body's own code.
@@ -3008,6 +3023,7 @@ fn target_files_inner(
     report_unemitted_library_classes(app, target);
     report_relation_class_calls(app, target);
     report_typescript_error_class(app, target);
+    report_typescript_enumerable(app, target);
     report_replayed_class_bodies(app, target);
     report_body_statements(app, target);
     report_controller_sibling_classes(app, target);

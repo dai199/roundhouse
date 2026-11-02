@@ -619,6 +619,9 @@ impl<'a> BodyTyper<'a> {
         class_object_receiver: bool,
     ) -> Option<Vec<Ty>> {
         let recv_ty = recv_ty?;
+        if !class_object_receiver && let Some(view) = self.enumerable_view(Some(recv_ty), method) {
+            return self.block_params_for(Some(&view), method, false);
+        }
         if matches!(recv_ty, Ty::Class { id, .. } if id.0.as_str() == PARAM_VALUE) {
             return match method.as_str() {
                 "each_with_index" | "each_with_object" => Some(vec![param_value_ty(), Ty::Int]),
@@ -1265,6 +1268,49 @@ impl<'a> BodyTyper<'a> {
         })
     }
 
+    /// What an `include Enumerable` instance answers `method` as: the
+    /// Array its `each` iterates, when the class's own `each` hands its
+    /// block to that collection's (`ClassInfo::each_forwards_block`) and
+    /// nothing nearer the instance defines `method`. Only the methods
+    /// Spinel's Enumerable answers as CRuby's does on such a class.
+    pub(super) fn enumerable_view(&self, recv_ty: Option<&Ty>, method: &Symbol) -> Option<Ty> {
+        let Some(Ty::Class { id, .. }) = recv_ty else { return None };
+        if !ENUMERABLE_METHODS.contains(&method.as_str()) {
+            return None;
+        }
+        let classes = self.classes();
+        let owns = |c: &ClassInfo| c.instance_methods.contains_key(method) || c.class_methods.contains_key(method);
+        let mut current = Some(id.clone());
+        let mut elem = None;
+        let mut seen = 0;
+        while let Some(cid) = current {
+            seen += 1;
+            let info = classes.get(&cid)?;
+            if seen > 64 || owns(info) || info.open {
+                return None;
+            }
+            if elem.is_none() && info.instance_methods.contains_key(&Symbol::from("each")) {
+                if !info.each_forwards_block {
+                    return None;
+                }
+                elem = match unwrap_fn_ret(&info.instance_methods[&Symbol::from("each")]) {
+                    Ty::Array { elem } => Some(elem),
+                    _ => return None,
+                };
+            }
+            for module in &info.includes {
+                if module.0.as_str() == "Enumerable" {
+                    return elem.map(|elem| Ty::Array { elem });
+                }
+                if classes.get(module).is_some_and(owns) {
+                    return None;
+                }
+            }
+            current = info.parent.clone();
+        }
+        None
+    }
+
     pub(super) fn dispatch(
         &self,
         recv_ty: Option<&Ty>,
@@ -1331,6 +1377,9 @@ impl<'a> BodyTyper<'a> {
                 };
                 return self.dispatch(Some(&as_array), method, block_ret, args);
             }
+        }
+        if let Some(view) = self.enumerable_view(recv_ty, method) {
+            return self.dispatch(Some(&view), method, block_ret, args);
         }
         // `self[:generated_at]` / `read_attribute(:generated_at)` read
         // the attribute TYPECAST, so `Time?` for a datetime column and
@@ -4277,6 +4326,15 @@ fn gradual_array(ty: &Ty) -> bool {
         _ => false,
     }
 }
+
+/// Enumerable's methods that Spinel answers on an app class including it exactly as CRuby does.
+const ENUMERABLE_METHODS: &[&str] = &[
+    "all?", "any?", "collect", "collect_concat", "compact", "count", "detect", "drop", "drop_while", "each_cons",
+    "each_slice", "each_with_index", "each_with_object", "entries", "filter", "filter_map", "find", "find_all",
+    "find_index", "first", "flat_map", "group_by", "include?", "inject", "map", "max", "max_by", "member?", "min",
+    "min_by", "minmax", "none?", "one?", "partition", "reduce", "reject", "reverse_each", "select", "sort", "sort_by",
+    "sum", "take", "take_while", "tally", "to_a", "uniq", "zip",
+];
 
 fn unwrap_fn_ret(ty: &Ty) -> Ty {
     match ty {

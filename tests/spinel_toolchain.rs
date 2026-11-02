@@ -224,6 +224,10 @@ mod mutable_literals;
 mod auto_source_gem_contract;
 #[path = "spinel_toolchain/auto_source_gem.rs"]
 mod auto_source_gem;
+#[path = "support/enumerable_mixin.rs"]
+mod enumerable_mixin_contract;
+#[path = "spinel_toolchain/enumerable_mixin.rs"]
+mod enumerable_mixin;
 #[path = "support/solid_queue_worker.rs"]
 mod solid_queue_worker_contract;
 #[path = "spinel_toolchain/solid_queue_worker.rs"]

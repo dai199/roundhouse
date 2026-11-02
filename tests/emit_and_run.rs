@@ -20589,6 +20589,10 @@ mod engine_config;
 mod engine_boot_branches;
 #[path = "emit_and_run/resource_dynamic_path.rs"]
 mod resource_dynamic_path;
+#[path = "support/enumerable_mixin.rs"]
+mod enumerable_mixin_contract;
+#[path = "emit_and_run/enumerable_mixin.rs"]
+mod enumerable_mixin;
 #[path = "support/solid_queue_worker.rs"]
 mod solid_queue_worker_contract;
 #[path = "emit_and_run/solid_queue_worker.rs"]

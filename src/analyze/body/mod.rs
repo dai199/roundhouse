@@ -330,6 +330,12 @@ pub struct ClassInfo {
     /// class's own methods and before walking the parent. Empty for
     /// most classes.
     pub includes: Vec<crate::ident::ClassId>,
+    /// The class's own `each` hands its block straight to a collection's
+    /// `each` (`delegate :each, to: :values`, `def each(&b) = @items.each(&b)`):
+    /// what it yields is that collection's elements, and what it answers is
+    /// the collection, so the answer's type names what an `include
+    /// Enumerable` method over it iterates.
+    pub each_forwards_block: bool,
     /// Declared by a gem's RBI rather than by the app or the catalog
     /// (`crate::gem_boundary`). Its own table is the gem's whole
     /// declared surface, so a miss on the class itself is a real miss --

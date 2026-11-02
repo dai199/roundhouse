@@ -1221,6 +1221,9 @@ impl Analyzer {
                 }
             } else {
                 classes.entry(id.clone()).or_default().source_instance_methods.insert(method.name.clone());
+                if method.name.as_str() == "each" && forwards_block_to_each(method) {
+                    classes.entry(id.clone()).or_default().each_forwards_block = true;
+                }
             }
             if method.receiver == crate::dialect::MethodReceiver::Instance
                 && method.name.as_str() == "initialize"
@@ -8464,6 +8467,19 @@ pub(crate) fn source_finder_classes(app: &App, resolver: &ConstResolver) -> Hash
     }).collect();
     record_class_side_ownership(&mut classes, app, resolver);
     classes
+}
+
+/// `def each(&block) = <collection>.each(&block)`, the block handed on untouched.
+fn forwards_block_to_each(method: &crate::dialect::MethodDef) -> bool {
+    let Some(block) = method.block_param.as_ref() else { return false };
+    let mut tail = &method.body;
+    while let ExprNode::Seq { exprs } = &*tail.node {
+        let [only] = exprs.as_slice() else { return false };
+        tail = only;
+    }
+    matches!(&*tail.node, ExprNode::Send { recv: Some(_), method, args, block: Some(passed), .. }
+        if method.as_str() == "each" && args.is_empty()
+            && matches!(&*passed.node, ExprNode::Var { name, .. } if *name == block.name))
 }
 
 /// Shared by ingest qualification and the typed finder registry. Retained
