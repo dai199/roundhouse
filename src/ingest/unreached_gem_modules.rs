@@ -15,7 +15,8 @@
 //! receiver: a reopen of somebody else's class, or a file that patches
 //! something as it loads, is always kept. Reached means its constant's
 //! last segment is written, outside a dead branch, in a source the app
-//! keeps; the reached grow from the app's own sources to a fixpoint.
+//! keeps, or its file's name is (a `require` loads it); the reached grow
+//! from the app's own sources to a fixpoint.
 
 use crate::det::{HashMap, HashSet};
 use std::path::Path;
@@ -34,7 +35,8 @@ pub(super) fn drop(app: &mut App, dir: &Path) {
             by_file.entry(path).or_default().push(i);
         }
     }
-    let mut candidates: HashMap<String, String> = HashMap::default();
+    // Each candidate's constant leaf, and its file stem: a `require` loads a file whose constant no one names (`pundit/railtie`).
+    let mut candidates: HashMap<String, (String, String)> = HashMap::default();
     for (path, classes) in &by_file {
         let Some(expected) = expected_constant(path) else { continue };
         let owned = classes.iter().all(|&i| {
@@ -45,7 +47,8 @@ pub(super) fn drop(app: &mut App, dir: &Path) {
         });
         if owned && classes.iter().any(|&i| app.library_classes[i].name.0.as_str() == expected) {
             let leaf = expected.rsplit("::").next().unwrap_or(&expected).to_string();
-            candidates.insert(path.clone(), leaf);
+            let stem = Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string();
+            candidates.insert(path.clone(), (leaf, stem));
         }
     }
     if candidates.is_empty() {
@@ -75,7 +78,10 @@ pub(super) fn drop(app: &mut App, dir: &Path) {
     loop {
         let reached: Vec<String> = unreached
             .iter()
-            .filter(|path| live.iter().any(|text| names(text, &candidates[*path])))
+            .filter(|path| {
+                let (leaf, stem) = &candidates[*path];
+                live.iter().any(|text| names(text, leaf) || names(text, stem))
+            })
             .cloned()
             .collect();
         if reached.is_empty() {
