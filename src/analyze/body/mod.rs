@@ -2421,7 +2421,7 @@ impl<'a> BodyTyper<'a> {
                 if let Some(t) = self.assoc_extension_ty(recv.as_ref(), method) {
                     return t;
                 }
-                if let Some(t) = self.assoc_loaded_ty(recv.as_ref(), method) {
+                if let Some(t) = self.assoc_loaded_ty(recv.as_ref(), method, ctx.self_ty.as_ref()) {
                     return t;
                 }
                 // `x.attr = v` evaluates to `v` — Ruby's rule for an

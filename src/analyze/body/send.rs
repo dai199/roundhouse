@@ -979,12 +979,13 @@ impl<'a> BodyTyper<'a> {
         &self,
         recv: Option<&crate::expr::Expr>,
         method: &Symbol,
+        self_ty: Option<&Ty>,
     ) -> Option<Ty> {
         if method.as_str() != "loaded?" {
             return None;
         }
         let ExprNode::Send {
-            recv: Some(owner),
+            recv: owner,
             method: assoc,
             args,
             block: None,
@@ -992,6 +993,11 @@ impl<'a> BodyTyper<'a> {
         } = &*recv?.node
         else {
             return None;
+        };
+        // A reader with no receiver is the enclosing model's own (`recurring_executions.loaded?`), as `lower::assoc_loaded` resolves it.
+        let owner_ty = match owner {
+            Some(owner) => owner.ty.as_ref(),
+            None => self_ty,
         };
         // `association(:name).loaded?` — the reflection spelling of the
         // same question, for any association with a flat predicate.
@@ -1025,7 +1031,7 @@ impl<'a> BodyTyper<'a> {
         // Typed owners that miss the flat predicate return None — do
         // not fall through to the unique-name path (that is for
         // untyped view locals only).
-        match owner.ty.as_ref() {
+        match owner_ty {
             Some(Ty::Class { id, .. }) => {
                 return has_flat(id).then_some(Ty::Bool);
             }
