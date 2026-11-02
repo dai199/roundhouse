@@ -104,7 +104,9 @@ pub(super) fn carry(app: &mut App, dir: &Path) -> super::boot_program::Taken {
     let mut statements = Vec::new();
     for setting in settings {
         let span = Span { file, start: setting.start, end: setting.value.span.end };
-        let recv = Expr::new(span, ExprNode::Const { path: setting.module.split("::").map(Symbol::from).collect() });
+        let mut recv = Expr::new(span, ExprNode::Const { path: setting.module.split("::").map(Symbol::from).collect() });
+        // Not resolved from the source at its span: that span is the host's `config.…` write, which never names the module.
+        recv.decisions |= crate::expr::GENERATED_CONST_REF;
         let target = LValue::Attr { recv, name: Symbol::from(setting.attr.as_str()) };
         statements.push(Expr::new(span, ExprNode::Assign { target, value: setting.value }));
         taken.insert((APPLICATION.to_string(), setting.start));
