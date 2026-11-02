@@ -290,6 +290,9 @@ end
         let bin_path = format!("build/{stem}");
 
         // Compile with spinel.
+        if std::env::var_os("RH_SPINEL_BUNDLE_COLLECT").is_some() {
+            panic!("spinel bundle collect: not bundled");
+        }
         let compile = Command::new("spinel")
             .arg("--rbs")
             .arg("sig")
