@@ -61,7 +61,8 @@ fn a_forwarded_engine_setting_checks_clean() {
 #[test]
 fn a_forwarded_engine_setting_is_set_at_boot_and_names_the_superclass() {
     let run = app().run_ruby(
-        "raise \"enabled\" unless Thing.enabled == false\n\
+        "require File.expand_path(\"app/controllers/thing/labels_controller\", Dir.pwd)\n\
+         raise \"enabled\" unless Thing.enabled == false\n\
          raise \"label\" unless Thing.label == \"default\"\n\
          raise \"superclass\" unless Thing::LabelsController.superclass == ThingBaseController\n\
          puts \"engine config passed\"\n",
