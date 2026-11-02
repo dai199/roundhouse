@@ -52,8 +52,8 @@ module ActiveRecord
   class Column
     @name: String
     @sql_type: String
-    attr_reader name: String
-    attr_reader sql_type: String
+    def name: () -> String
+    def sql_type: () -> String
     def initialize: (String name, String sql_type) -> void
     def limit: () -> Integer?
   end

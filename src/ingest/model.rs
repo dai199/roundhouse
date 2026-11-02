@@ -551,6 +551,21 @@ pub(super) fn ingest_model_body_items(
         start: stmt.location().start_offset() as u32,
         end: stmt.location().end_offset() as u32,
     };
+    // Only `serialize` beside the `define_method`s: the other macros are read from the statement, not from a rewritten Expr.
+    let mut macros = Vec::new();
+    if let Some(methods) = super::define_method_loop::unroll_with_macros(stmt, owner, file, &mut macros)
+        && macros.iter().all(|m| matches!(&*m.node, ExprNode::Send { recv: None, method, .. } if method.as_str() == "serialize"))
+    {
+        let mut leading = Some(leading_comments);
+        let mut items: Vec<ModelBodyItem> = Vec::new();
+        for expr in macros {
+            items.push(ModelBodyItem::Unknown { expr, leading_comments: leading.take().unwrap_or_default(), leading_blank_line: false });
+        }
+        for method in methods {
+            items.push(ModelBodyItem::Method { method, leading_comments: leading.take().unwrap_or_default(), leading_blank_line: false });
+        }
+        return Ok(items);
+    }
     if let Some(call) = stmt.as_call_node() {
         if with_options::is_with_options(&call) {
             return match with_options::expand(&call, &[], owner, file, class_consts) {

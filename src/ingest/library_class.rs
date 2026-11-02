@@ -197,7 +197,10 @@ fn ingest_library_classes_impl(
         if let Some(lc) = file_data_class(&root, file)? {
             return Ok(vec![lc]);
         }
-        if let Some(lc) = file_struct_class(&root, file)? {
+        // Not an initializer's: the boot program replays that statement, and a class beside it would define the constant twice.
+        if !file.contains("config/initializers/")
+            && let Some(lc) = file_struct_class(&root, file)?
+        {
             return Ok(vec![lc]);
         }
     }

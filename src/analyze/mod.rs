@@ -10228,7 +10228,11 @@ fn register_serialized_columns(body: &[ModelBodyItem], methods: &mut HashMap<Sym
         if method.as_str() != "serialize" {
             continue;
         }
-        for name in args.iter().map_while(symbol_arg) {
+        let name_arg = |e: &Expr| match &*e.node {
+            ExprNode::Lit { value: Literal::Str { value } } => Some(Symbol::from(value.as_str())),
+            _ => symbol_arg(e).cloned(),
+        };
+        for name in args.iter().map_while(name_arg) {
             methods.insert(name.clone(), Ty::Untyped);
             methods.insert(Symbol::from(format!("{}=", name.as_str())), Ty::Untyped);
         }

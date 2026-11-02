@@ -8211,6 +8211,10 @@ fn report_unavailable_class_value(
 /// a clean emit. Also ledgers superclass Consts (via `parent_span`) and
 /// lowers-added exception Consts surveyed from a throwaway controller
 /// lower (emit still lowers controllers after this gate today).
+fn unrolled_define(app: &App, name: crate::span::Span) -> bool {
+    app.models.iter().flat_map(|m| m.methods()).chain(app.library_classes.iter().flat_map(|lc| lc.methods.iter())).any(|m| m.name_span == name)
+}
+
 fn report_unsupported_bundled_constants(app: &App, target: BuildTarget) {
     // Column readers are synthesized inside the emitter, after this walk,
     // so a Send match never sees them. The schema column is the fact.
@@ -8465,6 +8469,8 @@ fn report_unsupported_bundled_constants(app: &App, target: BuildTarget) {
             && matches!(method.as_str(), "define_method" | "define_singleton_method")
             && recv.as_ref().is_none_or(|r| matches!(&*r.node, crate::expr::ExprNode::SelfRef))
             && !args.first().is_some_and(|a| matches!(&*a.node, crate::expr::ExprNode::Lit { value: crate::expr::Literal::Sym { .. } | crate::expr::Literal::Str { .. } }))
+            // Not a loop ingest unrolled: its methods carry the name argument's span, and the call is only the concern's unspliced original.
+            && !args.first().is_some_and(|a| unrolled_define(app, a.span))
         {
             emit::diagnostics::report_unsupported(
                 expr.span,

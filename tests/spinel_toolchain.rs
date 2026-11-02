@@ -232,6 +232,10 @@ mod enumerable_mixin;
 mod file_level_struct_contract;
 #[path = "spinel_toolchain/file_level_struct.rs"]
 mod file_level_struct;
+#[path = "support/concern_define_loop.rs"]
+mod concern_define_loop_contract;
+#[path = "spinel_toolchain/concern_define_loop.rs"]
+mod concern_define_loop;
 #[path = "support/solid_queue_worker.rs"]
 mod solid_queue_worker_contract;
 #[path = "spinel_toolchain/solid_queue_worker.rs"]
