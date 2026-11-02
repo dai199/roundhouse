@@ -39,13 +39,23 @@ export tmp
 start=$(date +%s)
 
 # Not one suite at a time: each is mostly one Spinel compile; the PostgreSQL one shares a database, so it runs alone.
+# Not in the plan's order: the longest suites start first, so none is left running alone at the end.
+ordered=$(python3 - $TESTS <<'PY'
+import json, os, sys
+try:
+    seconds = json.loads(os.environ.get("CI_SPINEL_TIMINGS") or "{}").get("framework", {})
+except ValueError:
+    seconds = {}
+print(" ".join(sorted(sys.argv[1:], key=lambda s: -seconds.get(s, 0))))
+PY
+)
 status=0
 parallel=()
 serial=()
-for suite in $TESTS; do
+for suite in $ordered; do
   case "$suite" in spinel_pg_db) serial+=("$suite") ;; *) parallel+=("$suite") ;; esac
 done
-printf '%s\n' "${parallel[@]}" | xargs -P 3 -I{} bash -c 'run_suite {}' || status=1
+printf '%s\n' "${parallel[@]}" | xargs -P "$(nproc)" -I{} bash -c 'run_suite {}' || status=1
 for suite in "${serial[@]}"; do run_suite "$suite" || status=1; done
 for suite in $TESTS; do
   echo "::group::$suite"

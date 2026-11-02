@@ -996,6 +996,7 @@ jobs:
           SPINEL_PG_DIR: ${{ github.workspace }}/spinel-pg
           ROUNDHOUSE_PG_TEST_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
           ROUNDHOUSE_PG_TEST_REQUIRED: "1"
+          CI_SPINEL_TIMINGS: ${{ needs.plan.outputs.spinel-timings }}
           CI_SPINEL_TIMINGS_OUT: ${{ runner.temp }}/spinel-timings/framework-${{ matrix.shard }}.jsonl
         run: scripts/ci-spinel-framework.sh
       - name: Upload recorded test seconds
