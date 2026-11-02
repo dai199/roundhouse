@@ -224,6 +224,10 @@ mod mutable_literals;
 mod auto_source_gem_contract;
 #[path = "spinel_toolchain/auto_source_gem.rs"]
 mod auto_source_gem;
+#[path = "support/solid_queue_worker.rs"]
+mod solid_queue_worker_contract;
+#[path = "spinel_toolchain/solid_queue_worker.rs"]
+mod solid_queue_worker;
 #[path = "support/active_model_serializer.rs"]
 mod active_model_serializer_app;
 #[path = "spinel_toolchain/active_model_serializer.rs"]
