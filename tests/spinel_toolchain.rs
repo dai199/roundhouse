@@ -236,10 +236,6 @@ mod file_level_struct;
 mod concern_define_loop_contract;
 #[path = "spinel_toolchain/concern_define_loop.rs"]
 mod concern_define_loop;
-#[path = "support/solid_queue_worker.rs"]
-mod solid_queue_worker_contract;
-#[path = "spinel_toolchain/solid_queue_worker.rs"]
-mod solid_queue_worker;
 #[path = "support/active_model_serializer.rs"]
 mod active_model_serializer_app;
 #[path = "spinel_toolchain/active_model_serializer.rs"]

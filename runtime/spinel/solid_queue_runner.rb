@@ -51,8 +51,9 @@ module SolidQueueRunner
     if WORKER.empty?
       WORKER << SolidQueue::Process.register(
         kind: "Worker",
-        name: "worker-#{::Process.pid}",
-        pid: ::Process.pid,
+        # Not `::Process`: spinel reads the rooted name as solid_queue's own `SolidQueue::Process` model.
+        name: "worker-#{Process.pid}",
+        pid: Process.pid,
         hostname: "localhost",
         metadata: { "queues" => "*" }
       )

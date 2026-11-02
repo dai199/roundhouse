@@ -1,4 +1,4 @@
-//! Shared by the Ruby lane and the Spinel lane. An app on solid_queue whose code names solid_queue's classes carries
+//! An app on solid_queue whose code names solid_queue's classes carries
 //! solid_queue's own record models (from the installed gem, at the
 //! version the lockfile pins) over `db/queue_schema.rb`, and the runtime
 //! runs solid_queue's worker in process: `perform_later` writes the job
