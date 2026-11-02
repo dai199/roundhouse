@@ -3,7 +3,7 @@
 set -uo pipefail
 # The binaries run outside cargo, so .cargo/config.toml's [env] stack size is not applied.
 export RUST_MIN_STACK="${RUST_MIN_STACK:-33554432}"
-test -n "${TESTS:-}"
+test -n "${TESTS:-}" || exit 1
 tmp="${RUNNER_TEMP:-/tmp}/spinel-framework"
 mkdir -p "$tmp/logs"
 
