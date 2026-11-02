@@ -6,7 +6,7 @@
 
 use super::emit_and_run;
 
-const THING: &str = r#"module Thing
+const THING: &str = r##"module Thing
   mattr_accessor :base_controller_class, default: "::ApplicationController"
   mattr_accessor :label, default: "default"
   mattr_accessor :enabled, default: true
@@ -21,7 +21,7 @@ const THING: &str = r#"module Thing
     end
   end
 end
-"#;
+"##;
 
 const BASE: &str = r#"class ThingBaseController < ApplicationController
   def base_label
@@ -30,14 +30,14 @@ const BASE: &str = r#"class ThingBaseController < ApplicationController
 end
 "#;
 
-const CONTROLLER: &str = r#"module Thing
+const CONTROLLER: &str = r##"module Thing
   class LabelsController < Thing.base_controller_class.constantize
     def show
       render plain: "#{base_label} #{Thing.label} #{Thing.enabled}"
     end
   end
 end
-"#;
+"##;
 
 fn app() -> emit_and_run::Overlay {
     emit_and_run::real_blog()
