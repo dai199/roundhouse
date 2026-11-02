@@ -630,6 +630,12 @@ impl<'a> BodyTyper<'a> {
                 _ => None,
             };
         }
+        // `ActiveSupport::Notifications.instrument(name, payload) { |payload| … }` yields its payload Hash, as Rails' does (and solid_queue's `SolidQueue.instrument` through it).
+        if method.as_str() == "instrument"
+            && matches!(recv_ty, Ty::Class { id, .. } if matches!(id.0.as_str(), "ActiveSupport::Notifications" | "SolidQueue"))
+        {
+            return Some(vec![Ty::Hash { key: std::sync::Arc::new(Ty::Sym), value: std::sync::Arc::new(Ty::Untyped) }]);
+        }
         // `then` / `yield_self` / `tap` yield the RECEIVER itself, on
         // every type — Kernel methods, not container ones, so they are
         // answered before the shape match rather than repeated inside
