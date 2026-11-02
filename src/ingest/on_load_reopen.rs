@@ -208,7 +208,12 @@ fn carry_receiver_mixins(body: Node<'_>, file: &str, app: &mut App) {
             continue;
         };
         let name = ClassId(Symbol::from(target.join("::").as_str()));
-        let span = crate::span::Span::synthetic();
+        let at = call.location();
+        let span = crate::span::Span {
+            file: super::sources::file_id(file),
+            start: at.start_offset() as u32,
+            end: at.end_offset() as u32,
+        };
         // Not a parsed reopen: a module body holding only `extend` ingests as no class at all.
         let index = match app.library_classes.iter().position(|lc| lc.name == name) {
             Some(i) => i,
