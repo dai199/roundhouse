@@ -4947,6 +4947,7 @@ fn ruby_family_runtime_files(
     }
     apply_conditional_declarations(&mut files, app);
     apply_file_programs(&mut files, app);
+    drop_solid_queue_standin(app, &mut files);
     Ok(files)
 }
 
@@ -8901,6 +8902,21 @@ fn apply_gem_packages(files: &mut Vec<(String, String)>, app: &App) -> Result<()
     Ok(())
 }
 
+/// solid_queue's own models replace the queue stand-in: an app that
+/// carries them (`ingest::source_gems::framework_models`) ships without
+/// `runtime/solid_queue_standin.rb`, whose classes would reopen them.
+fn drop_solid_queue_standin(app: &App, files: &mut Vec<(String, String)>) {
+    if !app.models.iter().any(|m| m.name.0.as_str() == "SolidQueue::Job") {
+        return;
+    }
+    files.retain(|(path, _)| path != "runtime/solid_queue_standin.rb");
+    for (path, text) in files.iter_mut() {
+        if path == "boot.rb" {
+            *text = text.replace("require_relative \"runtime/solid_queue_standin\"\n", "");
+        }
+    }
+}
+
 fn spinel_files(app: &App, fixture: &Path, param_binds: bool) -> Result<(Vec<(String, String)>, Vec<String>), String> {
     let mut files: Vec<(String, String)> = Vec::new();
 
@@ -9618,6 +9634,7 @@ fn spinel_files(app: &App, fixture: &Path, param_binds: bool) -> Result<(Vec<(St
     apply_pagination_demand(&mut files)?;
     apply_pagy_demand(&mut files, app)?;
     apply_pay_demand(&mut files, app)?;
+    drop_solid_queue_standin(app, &mut files);
     Ok((files, test_stems))
 }
 

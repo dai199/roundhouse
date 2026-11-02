@@ -603,21 +603,41 @@ pub(in crate::analyze) fn register(classes: &mut HashMap<ClassId, ClassInfo>) {
         ("head", Ty::Int),
         ("response", Ty::Union { variants: vec![test_response, Ty::Nil].into() }),
     ]);
-    // solid_queue's queue API over the in-process queue (runtime/spinel/solid_queue.rb).
-    let sq_queue = Ty::Class { id: ClassId(Symbol::from("SolidQueue::Queue")), args: vec![].into() };
-    register_stdlib_class(classes, "SolidQueue::Queue", &[
-        ("find_by_name", sq_queue.clone()),
-        ("new", sq_queue),
-    ], &[
-        ("name", Ty::Str),
-        ("clear", Ty::Int),
-    ]);
-    let sq_relation = Ty::Class { id: ClassId(Symbol::from("SolidQueue::Semaphore::Relation")), args: vec![].into() };
-    register_stdlib_class(classes, "SolidQueue::Semaphore", &[("where", sq_relation)], &[]);
-    register_stdlib_class(classes, "SolidQueue::Semaphore::Relation", &[], &[
-        ("delete_all", Ty::Int),
-        ("count", Ty::Int),
-    ]);
+    // lib/solid_queue.rb's module settings the models read (runtime/spinel/solid_queue.rb).
+    {
+        let duration = Ty::Class { id: ClassId(Symbol::from("ActiveSupport::Duration")), args: vec![].into() };
+        let sq = classes.entry(ClassId(Symbol::from("SolidQueue"))).or_default();
+        sq.is_module = true;
+        sq.class_methods.insert(Symbol::from("holds_the_queue"), Ty::Bool);
+        sq.class_methods.insert(Symbol::from("use_skip_locked"), Ty::Bool);
+        sq.class_methods.insert(Symbol::from("preserve_finished_jobs"), Ty::Bool);
+        sq.class_methods.insert(Symbol::from("preserve_finished_jobs?"), Ty::Bool);
+        sq.class_methods.insert(Symbol::from("process_alive_threshold"), duration.clone());
+        sq.class_methods.insert(Symbol::from("clear_finished_jobs_after"), duration.clone());
+        sq.class_methods.insert(Symbol::from("default_concurrency_control_period"), duration);
+        sq.class_methods.insert(Symbol::from("connects_to"), Ty::Nil);
+        sq.class_methods.insert(Symbol::from("instrument"), Ty::Untyped);
+    }
+    register_stdlib_class(classes, "SolidQueue::Processes::ProcessPrunedError", &[], &[]);
+    // solid_queue's queue API over the in-process queue (runtime/spinel/solid_queue_standin.rb).
+    // Not over solid_queue's own models: an app that carries them has them registered already, and ships without the stand-in.
+    if !classes.contains_key(&ClassId(Symbol::from("SolidQueue::Job"))) {
+        let sq_queue = Ty::Class { id: ClassId(Symbol::from("SolidQueue::Queue")), args: vec![].into() };
+        register_stdlib_class(classes, "SolidQueue::Queue", &[
+            ("find_by_name", sq_queue.clone()),
+            ("new", sq_queue),
+        ], &[
+            ("name", Ty::Str),
+            ("clear", Ty::Int),
+        ]);
+        let sq_relation = Ty::Class { id: ClassId(Symbol::from("SolidQueue::Semaphore::Relation")), args: vec![].into() };
+        register_stdlib_class(classes, "SolidQueue::Semaphore", &[("where", sq_relation)], &[]);
+        register_stdlib_class(classes, "SolidQueue::Semaphore::Relation", &[], &[
+            ("delete_all", Ty::Int),
+            ("count", Ty::Int),
+        ]);
+    }
+
     // `ActiveSupport::Cache` — `expand_cache_key` and the bounded
     // `MemoryStore`, in runtime/spinel/active_support_cache.rb (the ruby
     // family and spinel). A cached value is whatever was written.
