@@ -44,6 +44,7 @@ fn app() -> emit_and_run::Overlay {
         .write("lib/thing.rb", THING)
         .write("app/controllers/thing_base_controller.rb", BASE)
         .write("app/controllers/thing/labels_controller.rb", CONTROLLER)
+        .edit("config/routes.rb", "  root \"articles#index\"\n", "  root \"articles#index\"\n  get \"thing/label\", to: \"thing/labels#show\"\n")
         .edit(
             "config/application.rb",
             "    config.load_defaults 8.1\n",
