@@ -228,6 +228,10 @@ mod auto_source_gem;
 mod enumerable_mixin_contract;
 #[path = "spinel_toolchain/enumerable_mixin.rs"]
 mod enumerable_mixin;
+#[path = "support/file_level_struct.rs"]
+mod file_level_struct_contract;
+#[path = "spinel_toolchain/file_level_struct.rs"]
+mod file_level_struct;
 #[path = "support/solid_queue_worker.rs"]
 mod solid_queue_worker_contract;
 #[path = "spinel_toolchain/solid_queue_worker.rs"]

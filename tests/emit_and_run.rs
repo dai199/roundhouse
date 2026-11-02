@@ -20593,6 +20593,10 @@ mod resource_dynamic_path;
 mod enumerable_mixin_contract;
 #[path = "emit_and_run/enumerable_mixin.rs"]
 mod enumerable_mixin;
+#[path = "support/file_level_struct.rs"]
+mod file_level_struct_contract;
+#[path = "emit_and_run/file_level_struct.rs"]
+mod file_level_struct;
 #[path = "support/solid_queue_worker.rs"]
 mod solid_queue_worker_contract;
 #[path = "emit_and_run/solid_queue_worker.rs"]
