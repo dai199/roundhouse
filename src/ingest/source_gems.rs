@@ -20,6 +20,13 @@ pub(super) struct SourceGem {
     files: BTreeSet<PathBuf>,
 }
 
+impl SourceGem {
+    /// The installed gem's `lib/` and `app/`, read in place.
+    pub(super) fn source_dirs(&self) -> Vec<PathBuf> {
+        vec![self.installed.join("lib"), self.installed.join("app")]
+    }
+}
+
 pub(super) fn resolve<V: Vfs + ?Sized>(
     vfs: &V,
     dir: &Path,
@@ -56,7 +63,7 @@ pub(super) fn resolve<V: Vfs + ?Sized>(
 
 /// A framework gem's record models, mounted from its installed source when
 /// the compiler stands in for the rest of it: every `.rb` under the gem's
-/// `app/models`, and nothing it requires. None when the lockfile does not
+/// `app/models` and the `app/jobs` they name, and nothing it requires. None when the lockfile does not
 /// resolve the gem or no gem root holds that version.
 pub(super) fn framework_models<V: Vfs + ?Sized>(vfs: &V, dir: &Path, lock: Option<&Lockfile>, name: &str) -> Option<SourceGem> {
     let lock = lock?;
@@ -65,7 +72,7 @@ pub(super) fn framework_models<V: Vfs + ?Sized>(vfs: &V, dir: &Path, lock: Optio
     let installed = crate::i18n::gems::installed_gem(vfs, &roots, name, version)?;
     let installed = vfs.canonical(&installed).unwrap_or_else(|| normalize(&installed));
     let mut files = BTreeSet::new();
-    let mut dirs = vec![installed.join("app/models")];
+    let mut dirs = vec![installed.join("app/models"), installed.join("app/jobs")];
     while let Some(dir) = dirs.pop() {
         let Ok(entries) = vfs.read_dir(&dir) else { continue };
         for entry in entries {

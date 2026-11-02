@@ -8903,16 +8903,19 @@ fn apply_gem_packages(files: &mut Vec<(String, String)>, app: &App) -> Result<()
 }
 
 /// solid_queue's own models replace the queue stand-in: an app that
-/// carries them (`ingest::source_gems::framework_models`) ships without
-/// `runtime/solid_queue_standin.rb`, whose classes would reopen them.
+/// carries them (`ingest::source_gems::framework_models`) ships
+/// `runtime/solid_queue_runner.rb` in place of `runtime/solid_queue_standin.rb`.
 fn drop_solid_queue_standin(app: &App, files: &mut Vec<(String, String)>) {
-    if !app.models.iter().any(|m| m.name.0.as_str() == "SolidQueue::Job") {
-        return;
-    }
-    files.retain(|(path, _)| path != "runtime/solid_queue_standin.rb");
+    // Not both: the stand-in's classes would reopen the models, and the runner names the models the stand-in has no part of.
+    let (gone, line) = if app.models.iter().any(|m| m.name.0.as_str() == "SolidQueue::Job") {
+        ("runtime/solid_queue_standin.rb", "require_relative \"runtime/solid_queue_standin\"\n")
+    } else {
+        ("runtime/solid_queue_runner.rb", "require_relative \"runtime/solid_queue_runner\"\n")
+    };
+    files.retain(|(path, _)| path != gone);
     for (path, text) in files.iter_mut() {
         if path == "boot.rb" {
-            *text = text.replace("require_relative \"runtime/solid_queue_standin\"\n", "");
+            *text = text.replace(line, "");
         }
     }
 }

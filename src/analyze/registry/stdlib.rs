@@ -617,6 +617,17 @@ pub(in crate::analyze) fn register(classes: &mut HashMap<ClassId, ClassInfo>) {
         sq.class_methods.insert(Symbol::from("default_concurrency_control_period"), duration);
         sq.class_methods.insert(Symbol::from("connects_to"), Ty::Nil);
         sq.class_methods.insert(Symbol::from("instrument"), Ty::Untyped);
+        sq.class_methods.insert(Symbol::from("time_zone"), Ty::Union { variants: vec![Ty::Str, Ty::Nil].into() });
+        sq.class_methods.insert(Symbol::from("next_major_version"), Ty::Int);
+        sq.class_methods.insert(Symbol::from("deprecator"), Ty::Class { id: ClassId(Symbol::from("SolidQueue::Deprecator")), args: vec![].into() });
+    }
+    register_stdlib_class(classes, "SolidQueue::Deprecator", &[], &[("warn", Ty::Nil)]);
+    // `ActiveJob::Base.execute(job_data)`, the job a claimed solid_queue execution runs (runtime/spinel/solid_queue_runner.rb).
+    classes.entry(ClassId(Symbol::from("ActiveJob::Base"))).or_default().class_methods.entry(Symbol::from("execute")).or_insert(Ty::Nil);
+    {
+        let ar = classes.entry(ClassId(Symbol::from("ActiveRecord"))).or_default();
+        ar.is_module = true;
+        ar.class_methods.entry(Symbol::from("after_all_transactions_commit")).or_insert(Ty::Nil);
     }
     register_stdlib_class(classes, "SolidQueue::Processes::ProcessPrunedError", &[], &[]);
     // solid_queue's queue API over the in-process queue (runtime/spinel/solid_queue_standin.rb).

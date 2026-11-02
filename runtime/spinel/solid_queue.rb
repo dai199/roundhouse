@@ -30,6 +30,26 @@ module SolidQueue
     3.minutes
   end
 
+  def self.time_zone
+    nil
+  end
+
+  # Not the gem's own version: the models carried are 1.x, whose deprecations name 2.0.
+  def self.next_major_version
+    2
+  end
+
+  def self.deprecator
+    Deprecator.new
+  end
+
+  class Deprecator
+    def warn(message)
+      Kernel.warn("DEPRECATION WARNING: " + message.to_s)
+      nil
+    end
+  end
+
   # Not the host's queue database: the runtime opens only the primary, where the queue's tables are.
   def self.connects_to
     nil

@@ -622,7 +622,10 @@ fn ingest_rails_app<V: Vfs + ?Sized>(vfs: &V, dir: &Path, auto_source_gems: &[St
         .map_err(|message| IngestError::Parse { file: dir.join("roundhouse.yml").display().to_string(), message })?;
     // The queue's records: on solid_queue the compiler runs the jobs, but the records Rails keeps of them are
     // solid_queue's own models, read from its installed source over the app's `db/queue_schema.rb`.
-    let solid_queue_models = (read_queue_adapter(vfs, dir).as_deref() == Some("solid_queue") && vfs.exists(&dir.join("db/queue_schema.rb")))
+    // Not every app on solid_queue: only one whose code (or a gem it carries) names solid_queue's classes reads its records.
+    let solid_queue_models = (read_queue_adapter(vfs, dir).as_deref() == Some("solid_queue")
+        && vfs.exists(&dir.join("db/queue_schema.rb"))
+        && names_solid_queue(vfs, dir, &source_gems))
         .then(|| super::source_gems::framework_models(vfs, dir, lock.as_ref(), "solid_queue"))
         .flatten();
     let solid_queue_root = solid_queue_models.as_ref().and_then(|gem| gem.mount.strip_prefix(dir).ok().map(|m| m.join("app")));
@@ -3079,6 +3082,15 @@ end
     // Model-to-database ownership reads every model, concern splice and
     // library module, so it runs once they all exist.
     super::database_ownership::resolve(&mut app);
+    // Not an error: the queue's tables joined the primary at ingest, so solid_queue's record runs there, where the runtime's one connection is.
+    if solid_queue_root.is_some() {
+        for refusal in &mut app.database_refusals {
+            if refusal.construct == "connects_to" && refusal.detail.contains("`SolidQueue::Record`") {
+                refusal.warning = true;
+                refusal.detail = "solid_queue's records live in the primary database here, not the queue database `config.solid_queue.connects_to` names: the runtime opens the primary only".to_string();
+            }
+        }
+    }
 
     // After every library class and include is known: a `...` that only
     // reaches a stdlib method of known signature through `super` takes
@@ -12447,6 +12459,18 @@ pub(super) fn queue_adapter_line(line: &str) -> Option<Option<String>> {
 /// line scan as `read_forgery_verification_strategy` reads them. The
 /// last setting wins, and a last setting that isn't a literal leaves the
 /// adapter unknown (`None`) rather than falling back to an earlier one.
+/// Whether the app's own code, or a source gem's, writes `SolidQueue::`.
+fn names_solid_queue<V: Vfs + ?Sized>(vfs: &V, dir: &Path, source_gems: &[super::source_gems::SourceGem]) -> bool {
+    let mut dirs: Vec<PathBuf> = ["app", "lib", "config"].iter().map(|d| dir.join(d)).collect();
+    dirs.extend(source_gems.iter().flat_map(|gem| gem.source_dirs()));
+    dirs.iter().any(|root| {
+        vfs.is_dir(root)
+            && read_rb_files(vfs, root).unwrap_or_default().iter().any(|file| {
+                vfs.read(file).is_ok_and(|text| text.windows(12).any(|w| w == b"SolidQueue::"))
+            })
+    })
+}
+
 fn read_queue_adapter<V: Vfs + ?Sized>(vfs: &V, dir: &Path) -> Option<String> {
     let mut adapter: Option<String> = None;
     for sub in ["config/application.rb", "config/environments/production.rb", "config/initializers"] {
