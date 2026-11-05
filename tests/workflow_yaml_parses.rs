@@ -624,7 +624,7 @@ fn head_and_label_changes_replace_the_previous_pr_run_without_draft_churn() {
     );
     assert_eq!(
         ci["concurrency"]["cancel-in-progress"].as_str(),
-        Some("${{ github.event_name == 'pull_request' || github.event_name == 'push' }}")
+        Some("${{ github.event_name == 'pull_request' }}")
     );
 }
 

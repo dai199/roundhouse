@@ -171,8 +171,9 @@ this at the organization Actions policy). Workflow edits cannot remove that
 prompt.
 
 Pushes to canonical `main` run the Ruby floor plus any **path-owned**
-lanes (including Spinel when the diff owns it) and cancel a superseded SHA
-on the same ref. They do **not** force the full Spinel suite, Crystal, Go,
+lanes (including Spinel when the diff owns it). A run in progress finishes;
+a newer push waits as the one pending run on the ref, replacing any older
+pending one. They do **not** force the full Spinel suite, Crystal, Go,
 Swift, Kotlin, C#, Elixir, Python, Rust, TypeScript, WASM, or the
 extra-language smoke matrix. Broad Spinel and extra-target red are
 follow-up work on the three-hour scheduled Full validation cycle, not a
@@ -209,13 +210,15 @@ publication path.
   `ci:full` and names the commit in the plan's reasons. Only a whole line
   counts, so prose that names the marker does not trigger it. Pull requests
   ignore the marker and keep the maintainer-applied label. A later push
-  still cancels the run, and plans from its own commits only.
+  does not cancel the run once it has started, but replaces it while it is
+  still pending, and plans from its own commits only.
 - **Manual full validation:** Actions → **Full validation** → **Run workflow**.
   Leave `publish` unchecked. This executes freshly on the chosen ref; a
   branch-head dispatch is not a substitute for a PR merge-tree check.
 
-Superseded PR runs cancel. Push-to-main runs also cancel a superseded SHA;
-the scheduled full-ci lock does not. Neither dependency-cache hits nor
+Superseded PR runs cancel. A push-to-main run in progress is not cancelled;
+GitHub keeps only the newest pending run on the ref. The scheduled full-ci
+lock does not cancel either. Neither dependency-cache hits nor
 restored fixture source are test results; check the job summary for any
 explicitly reused execution evidence. The compact and summary gates run only
 when `plan` succeeded and the workflow has not been cancelled. Their explicit
