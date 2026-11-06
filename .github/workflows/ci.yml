@@ -69,7 +69,7 @@ env:
 
 jobs:
   plan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       plan: ${{ steps.plan.outputs.plan }}
@@ -120,7 +120,7 @@ jobs:
   # -------------------------------------------------------------------
   generate-fixture:
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       BUNDLE_JOBS: '4'
@@ -246,7 +246,7 @@ jobs:
   store-check:
     needs: [generate-fixture, plan]
     if: ${{ contains(fromJSON(needs.plan.outputs.jobs), 'store-check') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -334,7 +334,7 @@ jobs:
   build-wasm:
     needs: plan
     if: ${{ contains(fromJSON(needs.plan.outputs.jobs), 'build-wasm') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # The job normally finishes in a few minutes; a hung apt install
     # once rode the old 45-minute ceiling and stalled the whole
     # build-site → smoke → deploy tail behind it (2026-08-19).
@@ -373,7 +373,7 @@ jobs:
     # main/Full/unknown; ci:spinel focus sets spinel-advisory=false so the
     # CORE lane is merge-gate required for the fix round.
     continue-on-error: ${{ needs.plan.outputs.spinel-advisory == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     env:
       SCCACHE_DIR: ${{ github.workspace }}/.spinel-sccache
@@ -488,7 +488,7 @@ jobs:
   # -------------------------------------------------------------------
   unit-build:
     needs: generate-fixture
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     outputs:
       unit-test-artifact-id: ${{ steps.unit-tests.outputs.artifact-id }}
@@ -549,7 +549,7 @@ jobs:
 
   unit:
     needs: [generate-fixture, unit-build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
       # A failed partition must not cancel the remaining coverage.
@@ -629,7 +629,7 @@ jobs:
   build-roundhouse:
     needs: plan
     if: ${{ contains(fromJSON(needs.plan.outputs.jobs), 'build-roundhouse') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
 
     outputs:
@@ -701,7 +701,7 @@ jobs:
   browser-smoke-typescript:
     needs: [generate-fixture, plan]
     if: ${{ contains(fromJSON(needs.plan.outputs.jobs), 'browser-smoke-typescript') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
 
     permissions:
@@ -782,7 +782,7 @@ jobs:
   # Deterministic inputs (pinned SHA + fresh wasm), so blocking.
   browser-smoke-ide:
     needs: [build-wasm, generate-fixture]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
 
     steps:
@@ -950,7 +950,7 @@ jobs:
       shard-1: ${{ steps.result.outputs.shard-1 }}
       shard-2: ${{ steps.result.outputs.shard-2 }}
       shard-3: ${{ steps.result.outputs.shard-3 }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 30m: upstream's shards take 11-14m, but a fork's runners take about
     # 1.7x that (a 20m bound cut a passing shard 2 there, fork run
     # 38923600903). Still short of papering over a hung suite.
@@ -1042,7 +1042,7 @@ jobs:
     # Spelled out: the advisory-outputs anchor is defined further down.
     outputs:
       execution: ${{ steps.result.outputs.status }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
 
     continue-on-error: ${{ needs.plan.outputs.spinel-advisory == 'true' }}
@@ -1113,7 +1113,7 @@ jobs:
     # Require the producer's debug binary artifact id so a missing
     # upload cannot skip into a green compact gate (#317).
     if: ${{ contains(fromJSON(needs.plan.outputs.jobs), 'campfire-compare') && needs.build-roundhouse.outputs.roundhouse-bin-artifact-id != '' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 55m: leave room after a slow 20m libvips42 apt for oracle/emit.
     timeout-minutes: 55
 
@@ -1228,7 +1228,7 @@ jobs:
     name: campfire-spinel-build (binary)
     needs: [build-roundhouse, spinel-build, plan]
     if: ${{ !cancelled() && contains(fromJSON(needs.plan.outputs.jobs), 'campfire-spinel-build') && needs.build-roundhouse.outputs.roundhouse-bin-artifact-id != '' && needs.spinel-build.outputs.artifact-id != '' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 60m: apt alone can take 20m; fetch 5m + emit/build 25m still need room.
     timeout-minutes: 85
     continue-on-error: true
@@ -1380,7 +1380,7 @@ jobs:
     # An advisory producer failure must not become an artifact-download
     # failure. Only the upload's artifact ID proves the binary is available.
     if: ${{ !cancelled() && contains(fromJSON(needs.plan.outputs.jobs), 'campfire-spinel-compare') && needs.campfire-spinel-build.outputs.artifact-id != '' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Setup once + three walks. Not 3× the old 45m matrix ceiling: hung
     # apt/setup must die via step timeouts; healthy walks fit in 75m.
     timeout-minutes: 75
@@ -1487,7 +1487,7 @@ jobs:
     if: ${{ !cancelled() && contains(fromJSON(needs.plan.outputs.jobs), 'campfire-spinel-db') && needs.build-roundhouse.outputs.roundhouse-bin-artifact-id != '' && needs.spinel-build.outputs.artifact-id != '' }}
     outputs: &advisory-outputs
       execution: ${{ steps.result.outputs.status }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 60m: leave headroom after a slow 20m libvips-dev apt for oracle/emit.
     timeout-minutes: 60
 
@@ -1545,7 +1545,7 @@ jobs:
     # Require the producer's debug binary artifact id so a missing
     # upload cannot skip into a green compact gate (#317).
     if: ${{ contains(fromJSON(needs.plan.outputs.jobs), 'campfire-conformance') && needs.build-roundhouse.outputs.roundhouse-bin-artifact-id != '' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 55m: libvips42+ffmpeg apt alone can take ~20m on a slow Azure day.
     timeout-minutes: 55
 
@@ -1709,7 +1709,7 @@ jobs:
   # dispatch — no minitest at_exit).
   #
   # Requires libsqlite3-dev at link time (the binaries `-lsqlite3`).
-  # ubuntu-latest ships libsqlite3-0 (runtime) but not the dev linker
+  # ubuntu-26.04 ships libsqlite3-0 (runtime) but not the dev linker
   # symlink, so we install it explicitly.
   # Briefly went green after matz/spinel#631 closed (bffabac); then
   # matz/spinel c66d00a landed the shape-A fix for #634 and surfaced
@@ -1738,7 +1738,7 @@ jobs:
     outputs:
       artifact-id: ${{ steps.bundle.outputs.artifact-id }}
       execution: ${{ steps.result.outputs.status }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     continue-on-error: ${{ needs.plan.outputs.spinel-advisory == 'true' }}
     env:
@@ -1791,7 +1791,7 @@ jobs:
       shard-1: ${{ steps.result.outputs.shard-1 }}
       shard-2: ${{ steps.result.outputs.shard-2 }}
       shard-3: ${{ steps.result.outputs.shard-3 }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
 
     continue-on-error: ${{ needs.plan.outputs.spinel-advisory == 'true' }}
@@ -1986,7 +1986,7 @@ jobs:
     if: ${{ !cancelled() && contains(fromJSON(needs.plan.outputs.jobs), 'spinel-toolchain') && needs.generate-fixture.result == 'success' && needs.spinel-build.outputs.artifact-id != '' && needs.spinel-toolchain-build.outputs.artifact-id != '' }}
     outputs:
       artifact-id: ${{ steps.upload.outputs.artifact-id }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     continue-on-error: ${{ needs.plan.outputs.spinel-advisory == 'true' }}
     env:
@@ -2055,7 +2055,7 @@ jobs:
   compare:
     needs: [generate-fixture, plan]
     if: ${{ contains(fromJSON(needs.plan.outputs.jobs), 'compare') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 35
 
     permissions:
@@ -2362,7 +2362,7 @@ jobs:
     # Ledger by default: Full/path extras do not fail the workflow conclusion.
     # Focus labels set extras-advisory=false so fix rounds stay hard.
     continue-on-error: ${{ needs.plan.outputs.extras-advisory == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 35
 
     permissions:
@@ -2387,7 +2387,7 @@ jobs:
     # binary, so this job compiles no Roundhouse of its own.
     needs: [generate-fixture, plan, unit-build, build-roundhouse]
     if: ${{ contains(fromJSON(needs.plan.outputs.jobs), 'compare-ruby') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     env:
       # The archive embeds the producer's checkout and target paths.
@@ -2453,7 +2453,7 @@ jobs:
   compare-ruby-next:
     needs: [generate-fixture, plan, unit-build]
     if: ${{ contains(fromJSON(needs.plan.outputs.jobs), 'compare-ruby-next') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
@@ -2500,7 +2500,7 @@ jobs:
   compare-jruby:
     needs: [generate-fixture, plan]
     if: ${{ contains(fromJSON(needs.plan.outputs.jobs), 'compare-jruby') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
 
     steps:
@@ -2571,7 +2571,7 @@ jobs:
     needs: [generate-fixture, spinel-build, plan]
     if: ${{ !cancelled() && contains(fromJSON(needs.plan.outputs.jobs), 'spinel-compare') && needs.generate-fixture.result == 'success' && needs.spinel-build.outputs.artifact-id != '' }}
     outputs: *advisory-outputs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
 
     continue-on-error: ${{ needs.plan.outputs.spinel-advisory == 'true' }}
@@ -2653,7 +2653,7 @@ jobs:
   smoke:
     needs: [build-site, plan]
     if: ${{ !cancelled() && needs.plan.result == 'success' && needs.build-site.result == 'success' && contains(fromJSON(needs.plan.outputs.jobs), 'smoke') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 30m matches browser-smoke / campfire smoke: shared ci-playwright-install
     # may spend most of a slow apt day on install-deps before emit/test work.
     # (Do not regress to 15m — slow Azure apt can burn ~20m on install alone.)
@@ -2831,7 +2831,7 @@ jobs:
     needs: [build-site, plan]
     if: ${{ !cancelled() && needs.plan.result == 'success' && needs.build-site.result == 'success' && contains(fromJSON(needs.plan.outputs.jobs), 'smoke-extra') }}
     continue-on-error: ${{ needs.plan.outputs.extras-advisory == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -2858,7 +2858,7 @@ jobs:
     needs: [build-site, spinel-build, plan]
     if: ${{ !cancelled() && contains(fromJSON(needs.plan.outputs.jobs), 'spinel-smoke') && needs.build-site.result == 'success' && needs.spinel-build.outputs.artifact-id != '' }}
     outputs: *advisory-outputs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     continue-on-error: true
     env:
@@ -2946,7 +2946,7 @@ jobs:
     # Consumers gate on docker_tgz so a pack skip does not red smoke-docker.
     outputs:
       docker_tgz: ${{ steps.docker-tgz.outputs.present }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # `spin pack` runs Spinel's front end over the whole Campfire tree,
     # including ruby-vips.
     timeout-minutes: 50
@@ -3039,7 +3039,7 @@ jobs:
     # producer/pack gap, not a Docker smoke failure (see archive notice).
     if: ${{ !cancelled() && contains(fromJSON(needs.plan.outputs.jobs), 'campfire-smoke-docker') && needs.campfire-archive-build.result == 'success' && needs.campfire-archive-build.outputs.docker_tgz == 'true' }}
     outputs: *advisory-outputs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
 
     continue-on-error: true
@@ -3188,7 +3188,7 @@ jobs:
     needs: [campfire-archive-build, spinel-build, plan]
     if: ${{ !cancelled() && contains(fromJSON(needs.plan.outputs.jobs), 'campfire-smoke') && needs.campfire-archive-build.result == 'success' && needs.spinel-build.outputs.artifact-id != '' }}
     outputs: *advisory-outputs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # libvips-dev apt can take most of the budget; Playwright and the
     # README smoke still need room after it.
     timeout-minutes: 35
@@ -3271,7 +3271,7 @@ jobs:
     # inputs. assemble-site adds those to the same bytes before deployment.
     needs: [generate-fixture, build-wasm, plan]
     if: ${{ !cancelled() && contains(fromJSON(needs.plan.outputs.jobs), 'build-site') && needs.generate-fixture.result == 'success' && (needs.plan.outputs.site != 'true' || needs.build-wasm.result == 'success') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
 
     steps:
@@ -3757,7 +3757,7 @@ jobs:
   spinel-timings:
     needs: [plan, spinel-framework, spinel-toolchain]
     if: ${{ !cancelled() && needs.plan.result == 'success' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (contains(fromJSON(needs.plan.outputs.jobs), 'spinel-toolchain') || contains(fromJSON(needs.plan.outputs.jobs), 'spinel-framework')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
@@ -3786,7 +3786,7 @@ jobs:
   archive-results:
     needs: [plan, build-site, campfire-archive-build, smoke, spinel-smoke, campfire-smoke, campfire-smoke-docker]
     if: ${{ !cancelled() && needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.jobs), 'archive-results') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
@@ -3820,7 +3820,7 @@ jobs:
     if: ${{ !cancelled() && needs.plan.outputs.publish == 'true' && needs.build-site.result == 'success' && needs.archive-results.result == 'success' }}
     outputs:
       ready: ${{ steps.ready.outputs.ready }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
 
     steps:
@@ -3923,7 +3923,7 @@ jobs:
     # or failed needs, but do not schedule gates after workflow cancellation.
     needs: [plan, generate-fixture, unit-build, unit, build-roundhouse, store-check, compare, compare-ruby, compare-ruby-next, browser-smoke-typescript, campfire-conformance, campfire-compare]
     if: ${{ !cancelled() && needs.plan.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       passed: ${{ steps.gate.outputs.passed }}
@@ -3944,7 +3944,7 @@ jobs:
     needs: [plan, generate-fixture, unit-build, unit, build-roundhouse, store-check, compare, compare-ruby, compare-ruby-next, browser-smoke-typescript, campfire-conformance, campfire-compare, compact-required, compare-extra, compare-jruby, build-wasm, browser-smoke-ide, build-site, smoke, smoke-extra, spinel-build, spinel-framework, sidekiq-live, campfire-spinel-build, campfire-spinel-compare, campfire-spinel-db, spinel-toolchain-build, spinel-toolchain-plan, spinel-toolchain, spinel-compare, spinel-smoke, campfire-archive-build, campfire-smoke, campfire-smoke-docker, spinel-timings, archive-results, assemble-site]
     # Report selected failures and expected skips; stop on workflow cancellation.
     if: ${{ !cancelled() && needs.plan.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       complete: ${{ steps.gate.outputs.complete }}
