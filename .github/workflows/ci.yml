@@ -1837,6 +1837,26 @@ jobs:
         run: |
           chmod +x spinel-dist/spinel spinel-dist/spin spinel-dist/spinel_rbs_extract
           echo "$PWD/spinel-dist" >> $GITHUB_PATH
+      - name: Probe - log every spinel compile's phases (experiment)
+        run: |
+          mkdir -p "$RUNNER_TEMP/probe"
+          mv spinel-dist/spinel spinel-dist/spinel.real
+          cat > spinel-dist/spinel <<'SH'
+          #!/usr/bin/env bash
+          real="$(dirname "$0")/spinel.real"
+          log="${PROBE_DIR:-/tmp}/compiles.log"
+          err=$(mktemp)
+          t0=$(date +%s.%N); l0=$(cut -d' ' -f1 /proc/loadavg)
+          SP_TIMING=1 "$real" "$@" 2>"$err"; rc=$?
+          t1=$(date +%s.%N); l1=$(cut -d' ' -f1 /proc/loadavg)
+          { echo "compile pid=$$ rc=$rc wall=$(echo "$t1 - $t0" | bc) load0=$l0 load1=$l1 cwd=$PWD args=$*"; grep '^spinel-timing' "$err" | sed 's/^/  /'; } >> "$log"
+          grep -v '^spinel-timing' "$err" >&2; rm -f "$err"
+          exit $rc
+          SH
+          chmod +x spinel-dist/spinel
+          echo "PROBE_DIR=$RUNNER_TEMP/probe" >> "$GITHUB_ENV"
+          ( while sleep 5; do echo "$(date +%s) $(cut -d' ' -f1-4 /proc/loadavg) $(ps -eo comm= | grep -cE '^(clang|cc|cc1|gcc)')"; done > "$RUNNER_TEMP/probe/load.log" ) &
+          nproc; grep -m1 "model name" /proc/cpuinfo
       - uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ needs.spinel-toolchain-plan.outputs.artifact-id }}
@@ -1904,6 +1924,12 @@ jobs:
           test -x "$TINY_API_BIN"
           python3 scripts/ci-plan.py timed --kind toolchain --name tiny_api -- \
             "$TINY_API_BIN" --ignored --nocapture spinel_gate_
+      - name: Upload probe logs (experiment)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: probe-toolchain-${{ matrix.shard }}
+          path: ${{ runner.temp }}/probe
       - name: Upload recorded test seconds
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
