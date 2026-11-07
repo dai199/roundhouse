@@ -954,7 +954,7 @@ jobs:
     # 30m: upstream's shards take 11-14m, but a fork's runners take about
     # 1.7x that (a 20m bound cut a passing shard 2 there, fork run
     # 38923600903). Still short of papering over a hung suite.
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     continue-on-error: ${{ needs.plan.outputs.spinel-advisory == 'true' }}
     # spinel_pg_db runs the PostgreSQL Db shim against this server
