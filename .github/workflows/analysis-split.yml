@@ -5,43 +5,57 @@ on:
 permissions:
   contents: read
 env:
+  CAMPFIRE_SHA: c8f74a0b0e1e93146c4d7c1d6ac80c9079682216
   BRANCH: top-level-names
 jobs:
   measure:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-rust
       - name: Build roundhouse (release)
         run: cargo build --release --bin roundhouse
-      - name: Build Spinel branch (frame pointers)
+      - name: Clone Spinel
         run: |
           sudo apt-get update -q && sudo apt-get install -yq libsqlite3-dev libyaml-dev
           git clone -q https://github.com/matz/spinel sp
-          git -C sp fetch -q https://github.com/dai199/spinel "$BRANCH" && git -C sp checkout -q FETCH_HEAD
-          make -C sp deps >/dev/null && make -C sp all -j4 COPT="-O2 -g -fno-omit-frame-pointer" >/dev/null
-          git -C sp log -1 --oneline
+          git -C sp fetch -q https://github.com/dai199/spinel "$BRANCH"
+          git -C sp rev-parse FETCH_HEAD > /tmp/new.sha
+          git -C sp checkout -q FETCH_HEAD~2
+          find sp/test -name '*.rb' | sed 's|^sp/||' | sort > /tmp/tests.txt
       - name: Emit
         run: |
           tar -xzf split-fixtures/real-blog.tar.gz -C split-fixtures
+          curl -fsSL "https://codeload.github.com/basecamp/once-campfire/tar.gz/${CAMPFIRE_SHA}" -o /tmp/cf.tgz
+          mkdir -p split-fixtures/campfire && tar -xzf /tmp/cf.tgz -C split-fixtures/campfire --strip-components=1
+          RH=target/release/roundhouse
           mkdir -p out logs
-          target/release/roundhouse --target spinel split-fixtures/real-blog -o out/blog 2>&1 | tail -1
-      - name: perf
+          $RH --target spinel split-fixtures/real-blog -o out/blog 2>&1 | tail -1
+          $RH --target spinel split-fixtures/empty -o out/empty 2>&1 | tail -1
+          $RH --target spinel split-fixtures/campfire -o out/campfire --allow-unsupported 2>&1 | tail -1
+      - name: Compile with base, then branch, at the same path
         run: |
-          sudo apt-get install -yq linux-tools-common linux-tools-$(uname -r) || sudo apt-get install -yq linux-tools-azure
-          sudo sysctl kernel.perf_event_paranoid=-1
-          cd out/blog
-          perf record -F 299 --call-graph fp -o /tmp/perf.data -- $GITHUB_WORKSPACE/sp/spinel main.rb -c -o /tmp/blogp.c --force --timing 2> $GITHUB_WORKSPACE/logs/timing.log
-          perf report -i /tmp/perf.data --children --sort symbol --stdio -g none --percent-limit 0.7 2>/dev/null | grep -v '^$' | grep -v '^#' > $GITHUB_WORKSPACE/logs/perf-children.txt
-          for s in const_node_class_index infer_param_types_ex local_write_ty nullable_int_value narrow_object_arrays infer_write_types infer_block_params call_target an_cls_facts an_phase_storage; do
-            echo "=== $s callers" >> $GITHUB_WORKSPACE/logs/perf-callers.txt
-            perf report -i /tmp/perf.data --no-children --stdio --symbols=$s -G -g caller,1,callee,function,percent --percent-limit 0 2>/dev/null | grep -v '^#' | grep -v '^$' | head -60 >> $GITHUB_WORKSPACE/logs/perf-callers.txt
-            echo "=== $s callees" >> $GITHUB_WORKSPACE/logs/perf-callees.txt
-            perf report -i /tmp/perf.data --children --stdio --symbols=$s -g callee,1,caller,function,percent --percent-limit 0 2>/dev/null | grep -v '^#' | grep -v '^$' | head -60 >> $GITHUB_WORKSPACE/logs/perf-callees.txt
-          done
+          cat > /tmp/one.sh <<'E'
+          f="$1"; o=/tmp/corp/$V/$(echo "$f" | tr / _)
+          cd $GITHUB_WORKSPACE/sp && timeout 120 ./spinel "$f" -S > "$o" 2>&1; echo "exit=$?" >> "$o"
+          E
+          for V in base new; do
+            [ $V = new ] && git -C sp checkout -q $(cat /tmp/new.sha)
+            make -C sp deps >/dev/null && make -C sp all -j4 >/dev/null && git -C sp log -1 --oneline
+            for a in blog empty; do
+              ( cd out/$a && rbs=""; [ -d sig ] && rbs="--rbs sig"
+                $GITHUB_WORKSPACE/sp/spinel main.rb $rbs -c -o /tmp/$a-$V.c --force --timing ) > logs/$a-$V.log 2>&1 || echo "$a $V FAILED"
+              echo "$a $V $(grep -o 'phase=analysis ms=[0-9.]*' logs/$a-$V.log) $(grep -o 'phase=codegen_program ms=[0-9.]*' logs/$a-$V.log)"
+            done
+            mkdir -p /tmp/corp/$V
+            export V; xargs -P4 -n1 bash /tmp/one.sh < /tmp/tests.txt
+          done | tee logs/apps.txt
+          for a in blog empty; do cmp -s /tmp/$a-base.c /tmp/$a-new.c && echo "$a C identical" || echo "$a C DIFFERS"; done | tee -a logs/apps.txt
+          echo "corpus: $(wc -l < /tmp/tests.txt) files, $(diff -rq /tmp/corp/base /tmp/corp/new | wc -l) differ" | tee -a logs/apps.txt
+          diff -rq /tmp/corp/base /tmp/corp/new | head -50 > logs/corpus-diff.txt || true
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: analysis-split-5
+          name: analysis-split-6
           path: logs
