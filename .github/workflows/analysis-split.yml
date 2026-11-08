@@ -4,8 +4,6 @@ on:
     branches: [analysis-split]
 permissions:
   contents: read
-env:
-  CAMPFIRE_SHA: c8f74a0b0e1e93146c4d7c1d6ac80c9079682216
 jobs:
   measure:
     runs-on: ubuntu-latest
@@ -15,62 +13,56 @@ jobs:
       - uses: ./.github/actions/setup-rust
       - name: Build roundhouse (release)
         run: cargo build --release --bin roundhouse
-      - name: Build Spinel master
+      - name: Build Spinel master (frame pointers)
         run: |
           sudo apt-get update -q && sudo apt-get install -yq libsqlite3-dev libyaml-dev
           git clone -q https://github.com/matz/spinel spinel-src
           make -C spinel-src deps
-          make -C spinel-src all -j4
+          make -C spinel-src all -j4 COPT="-O2 -g -fno-omit-frame-pointer"
           git -C spinel-src log -1 --oneline
           echo "$PWD/spinel-src" >> $GITHUB_PATH
-      - name: Fetch apps
-        run: |
-          tar -xzf split-fixtures/real-blog.tar.gz -C split-fixtures
-          curl -fsSL "https://codeload.github.com/basecamp/once-campfire/tar.gz/${CAMPFIRE_SHA}" -o /tmp/cf.tgz
-          mkdir -p split-fixtures/campfire && tar -xzf /tmp/cf.tgz -C split-fixtures/campfire --strip-components=1
       - name: Emit
         run: |
+          tar -xzf split-fixtures/real-blog.tar.gz -C split-fixtures
           RH=target/release/roundhouse
-          mkdir -p out
-          $RH --target spinel split-fixtures/empty -o out/empty 2>&1 | tail -2
-          $RH --target spinel split-fixtures/real-blog -o out/blog 2>&1 | tail -2
-          ROUNDHOUSE_NO_TREESHAKE=1 $RH --target spinel split-fixtures/empty -o out/empty-ns 2>&1 | tail -2
-          ROUNDHOUSE_NO_TREESHAKE=1 $RH --target spinel split-fixtures/real-blog -o out/blog-ns 2>&1 | tail -2
-          $RH --target spinel split-fixtures/campfire -o out/campfire --allow-unsupported 2>&1 | tail -2
-          for d in out/*; do
-            echo "$d runtime_lines=$(find $d/runtime -name '*.rb' | xargs cat | wc -l) app_lines=$(find $d/app $d/config -name '*.rb' 2>/dev/null | xargs cat | wc -l)"
-          done | tee sizes.txt
-      - name: Time Spinel (C only, 3 rounds, interleaved)
+          mkdir -p out logs
+          $RH --target spinel split-fixtures/real-blog -o out/blog 2>&1 | tail -1
+          ROUNDHOUSE_NO_TREESHAKE=1 $RH --target spinel split-fixtures/empty -o out/empty-ns 2>&1 | tail -1
+          ROUNDHOUSE_NO_TREESHAKE=1 $RH --target spinel split-fixtures/real-blog -o out/blog-ns 2>&1 | tail -1
+      - name: Types of runtime positions, empty vs blog
         run: |
-          mkdir -p logs
-          for r in 1 2 3; do
-            for a in empty empty-ns blog blog-ns; do
-              ( cd out/$a && rbs=""; [ -d sig ] && rbs="--rbs sig"
-                /usr/bin/time -f "$a r$r wall=%e user=%U maxrss_kb=%M" spinel main.rb $rbs -c -o /tmp/$a.c --force --timing ) \
-                > logs/$a-r$r.log 2>&1 || echo "$a r$r FAILED"
-              tail -1 logs/$a-r$r.log
-            done
-          done | tee summary.txt
-      - name: Time Spinel on campfire (1 round)
+          for a in empty-ns blog-ns; do
+            ( cd out/$a && spinel main.rb --rbs sig --emit-types -o $GITHUB_WORKSPACE/logs/$a.types.json ) > logs/$a-types.log 2>&1 || echo "$a FAILED"
+          done
+          ls -la logs/*.types.json
+          gzip -k logs/*.types.json && rm logs/*.types.json
+      - name: Incremental cc (blog)
+        env:
+          SPINEL_CACHE_DIR: ${{ runner.temp }}/spcache
         run: |
-          ( cd out/campfire && rbs=""; [ -d sig ] && rbs="--rbs sig"
-            /usr/bin/time -f "campfire wall=%e user=%U maxrss_kb=%M" spinel main.rb $rbs -c -o /tmp/campfire.c --force --timing ) \
-            > logs/campfire.log 2>&1 || echo "campfire FAILED"
-          tail -1 logs/campfire.log | tee -a summary.txt
-      - name: perf on blog
+          cd out/blog
+          t() { /usr/bin/time -f "$1 wall=%e user=%U" "${@:2}"; }
+          t full-release spinel main.rb --rbs sig -o /tmp/blog-rel --timing > $GITHUB_WORKSPACE/logs/inc-release.log 2>&1
+          tail -1 $GITHUB_WORKSPACE/logs/inc-release.log
+          t inc-cold spinel main.rb --rbs sig -o /tmp/blog-inc --incremental --cache-stats --timing > $GITHUB_WORKSPACE/logs/inc-cold.log 2>&1
+          tail -1 $GITHUB_WORKSPACE/logs/inc-cold.log; grep -m1 "units=" $GITHUB_WORKSPACE/logs/inc-cold.log || true
+          t inc-same spinel main.rb --rbs sig -o /tmp/blog-inc --incremental --cache-stats --force --timing > $GITHUB_WORKSPACE/logs/inc-same.log 2>&1
+          tail -1 $GITHUB_WORKSPACE/logs/inc-same.log; grep -m1 "units=" $GITHUB_WORKSPACE/logs/inc-same.log || true
+          sed -i 's/content_for_set(:title, "Articles")/content_for_set(:title, "Articlez")/' app/views/articles/index.rb
+          t inc-view-edit spinel main.rb --rbs sig -o /tmp/blog-inc --incremental --cache-stats --force --timing > $GITHUB_WORKSPACE/logs/inc-edit.log 2>&1
+          tail -1 $GITHUB_WORKSPACE/logs/inc-edit.log; grep -m1 "units=" $GITHUB_WORKSPACE/logs/inc-edit.log || true
+          /tmp/blog-inc --help > /dev/null 2>&1; echo "binary exit=$?"
+      - name: perf on blog (call graph)
         continue-on-error: true
         run: |
           sudo apt-get install -yq linux-tools-common linux-tools-$(uname -r) || sudo apt-get install -yq linux-tools-azure
           sudo sysctl kernel.perf_event_paranoid=-1
-          cd out/blog && rbs=""; [ -d sig ] && rbs="--rbs sig"
-          perf record -F 499 -g -o /tmp/perf.data -- spinel main.rb $rbs -c -o /tmp/blogp.c --force > /dev/null 2>&1
-          perf report -i /tmp/perf.data --no-children --sort symbol --stdio 2>/dev/null | grep -v '^$' | head -150 > $GITHUB_WORKSPACE/logs/perf-self.txt
-          perf report -i /tmp/perf.data --children --sort symbol --stdio -g none 2>/dev/null | grep -v '^$' | head -150 > $GITHUB_WORKSPACE/logs/perf-children.txt
+          cd out/blog
+          perf record -F 299 --call-graph fp -o /tmp/perf.data -- spinel main.rb --rbs sig -c -o /tmp/blogp.c --force > /dev/null 2>&1
+          perf report -i /tmp/perf.data --children --sort symbol --stdio -g none --percent-limit 0.7 2>/dev/null | grep -v '^$' | grep -v '^#' > $GITHUB_WORKSPACE/logs/perf-children.txt
+          perf report -i /tmp/perf.data --no-children --sort symbol --stdio -g caller,0.5,callee,function,percent --percent-limit 1.5 2>/dev/null | grep -v '^$' | head -1500 > $GITHUB_WORKSPACE/logs/perf-callers.txt
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: analysis-split
-          path: |
-            logs
-            summary.txt
-            sizes.txt
+          name: analysis-split-2
+          path: logs
