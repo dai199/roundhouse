@@ -1029,7 +1029,7 @@ jobs:
           echo "$PWD/spinel-dist" >> $GITHUB_PATH
       - name: Spinel --incremental (experiment)
         env:
-          SPINEL_INC: "0"
+          SPINEL_INC: "1"
         run: scripts/ci-spinel-incremental.sh
       # Full runs select all native suites; targeted runs select their owners.
       # Continue after a failing suite without losing its failure status.
@@ -1871,7 +1871,7 @@ jobs:
           echo "$PWD/spinel-dist" >> $GITHUB_PATH
       - name: Spinel --incremental (experiment)
         env:
-          SPINEL_INC: "0"
+          SPINEL_INC: "1"
         run: scripts/ci-spinel-incremental.sh
       - uses: actions/download-artifact@v8
         with:
