@@ -1,0 +1,98 @@
+# Boots each app with its locked Rails, prints `Rails.application.routes`,
+# and compares it with the routes roundhouse reads (`dump_routes`).
+# Verification only: the oracle is never an input to the compiler.
+name: route-oracle
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [route-oracle]
+
+jobs:
+  oracle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - app: mastodon
+            repo: mastodon/mastodon
+            sha: bc0df90
+          - app: chatwoot
+            repo: chatwoot/chatwoot
+            sha: ed7b122
+          - app: forem
+            repo: forem/forem
+            sha: a017eda
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+    env:
+      RAILS_ENV: development
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/oracle
+      REDIS_URL: redis://localhost:6379
+      SECRET_KEY_BASE: oracle-secret-key-base-oracle-secret-key-base-oracle-secret-key-base
+      LOCAL_DOMAIN: localhost
+      APP_DOMAIN: localhost
+      FRONTEND_URL: http://localhost:3000
+      ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY: oracleoracleoracleoracleoracleor
+      ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY: oracleoracleoracleoracleoracleor
+      ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT: oracleoracleoracleoracleoracleor
+      BUNDLE_WITHOUT: ""
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: roundhouse
+      - name: Clone ${{ matrix.app }}
+        run: |
+          git clone --filter=blob:none https://github.com/${{ matrix.repo }}.git app
+          git -C app checkout -q ${{ matrix.sha }}
+      - name: Native libraries the bundle builds against
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libpq-dev libicu-dev libidn11-dev libpam0g-dev libvips protobuf-compiler libprotobuf-dev pkg-config
+      - uses: ruby/setup-ruby@v1
+        with:
+          working-directory: app
+          bundler-cache: false
+      - name: Bundle install into the app's vendor/bundle (where roundhouse reads source gems)
+        working-directory: app
+        run: |
+          bundle config set --local path vendor/bundle
+          bundle config set --local deployment false
+          bundle install --jobs 4 --retry 2
+      - name: Rails' routes
+        working-directory: app
+        run: |
+          bundle exec rails db:create >/dev/null 2>&1 || true
+          bundle exec rails runner ../roundhouse/scripts/route-oracle/rails_routes.rb > ../rails.txt 2> ../rails.err || { tail -40 ../rails.err; exit 1; }
+          wc -l ../rails.txt
+      - uses: dtolnay/rust-toolchain@stable
+      - name: roundhouse's routes
+        working-directory: roundhouse
+        run: |
+          cargo build --release --bin dump_routes
+          target/release/dump_routes --continue ../app > ../roundhouse.txt 2> ../roundhouse.err || { tail -40 ../roundhouse.err; exit 1; }
+          wc -l ../roundhouse.txt
+      - name: Compare
+        run: |
+          ruby roundhouse/scripts/route-oracle/compare.rb rails.txt roundhouse.txt | tee compare.txt
+          { echo "## ${{ matrix.app }}"; echo '```'; head -200 compare.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: route-oracle-${{ matrix.app }}
+          path: |
+            rails.txt
+            rails.err
+            roundhouse.txt
+            roundhouse.err
+            compare.txt
