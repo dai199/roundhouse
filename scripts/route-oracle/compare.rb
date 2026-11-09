@@ -26,13 +26,14 @@ rails = read(ARGV.fetch(0)).reject { |r| %w[INTERNAL ENGINE RACK].include?(r.end
 # Rails' own engines' routes (`/rails/active_storage`, `/rails/action_mailbox`, `/rails/conductor`):
 # roundhouse serves Active Storage from its runtime table, not the app's, so these are counted apart.
 framework, rails = rails.partition { |r| r.path.start_with?("/rails/") }
+ours = read(ARGV.fetch(1)).reject { |r| r.path.start_with?("/rails/") }
 # Routes of a gem not yet read from source (`ORACLE_OUT_OF_SCOPE`, a regexp over "PATH ENDPOINT"), counted apart.
 out_of_scope = []
 if (scope = ENV["ORACLE_OUT_OF_SCOPE"]) && !scope.empty?
   pattern = Regexp.new(scope)
   out_of_scope, rails = rails.partition { |r| pattern.match?("#{r.path} #{r.endpoint}") }
+  ours = ours.reject { |r| pattern.match?("#{r.path} #{r.endpoint}") }
 end
-ours = read(ARGV.fetch(1))
 # A route roundhouse knows it cannot run (`RoundhouseUnmodeledEndpoint`) is reported, not served.
 unmodeled, ours = ours.partition { |r| r.endpoint.start_with?("RoundhouseUnmodeledEndpoint") }
 served = ours.reject { |r| r.state.start_with?("refused") }

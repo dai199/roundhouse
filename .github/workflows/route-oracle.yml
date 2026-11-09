@@ -106,8 +106,8 @@ jobs:
           wc -l ../roundhouse.txt
       - name: Compare
         run: |
-          # omniauth is the next gem in: its callback routes are counted apart until it is read from source.
-          ORACLE_OUT_OF_SCOPE='[Oo]mniauth|/auth/:provider|/omniauth/' ruby roundhouse/scripts/route-oracle/compare.rb rails.txt roundhouse.txt | tee compare.txt
+          # The gems not read from source yet (omniauth, doorkeeper): their routes are counted apart on both sides.
+          ORACLE_OUT_OF_SCOPE='[Oo]mniauth|/auth/:provider|/omniauth/|Doorkeeper::|^/oauth/' ruby roundhouse/scripts/route-oracle/compare.rb rails.txt roundhouse.txt | tee compare.txt
           { echo "## ${{ matrix.app }}"; echo '```'; head -200 compare.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
