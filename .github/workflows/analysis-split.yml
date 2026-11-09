@@ -40,5 +40,5 @@ jobs:
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: rounds-perf-1
+          name: rounds-perf-2
           path: logs
