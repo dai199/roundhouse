@@ -10,7 +10,8 @@ on:
 
 jobs:
   oracle:
-    runs-on: ubuntu-latest
+    # gcc 13: gcc 14 (ubuntu-latest) turns an old extension's mismatched callback pointer into an error (scout_apm 5.3.3).
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -76,8 +77,7 @@ jobs:
           sed -i -E '/^ruby /d' Gemfile
           bundle config set --local path vendor/bundle
           bundle config set --local deployment false
-          # gcc 14 makes an old extension's mismatched callback pointer an error.
-          CFLAGS="-Wno-error=incompatible-pointer-types" bundle install --jobs 4 --retry 2
+          bundle install --jobs 4 --retry 2
       - name: Rails' routes
         working-directory: app
         run: |
