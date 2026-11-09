@@ -21,61 +21,24 @@ jobs:
           sudo apt-get update -q && sudo apt-get install -yq libsqlite3-dev libyaml-dev
           git clone -q https://github.com/matz/spinel sp
           git -C sp fetch -q https://github.com/dai199/spinel "$BRANCH" && git -C sp checkout -q FETCH_HEAD
-          make -C sp deps >/dev/null && make -C sp all -j4 >/dev/null && git -C sp log -1 --oneline
-      - name: Emit the apps and their edits
+          make -C sp deps >/dev/null && make -C sp all -j4 COPT="-O2 -g -fno-omit-frame-pointer" >/dev/null && git -C sp log -1 --oneline
+      - name: Emit
         run: |
           tar -xzf split-fixtures/real-blog.tar.gz -C split-fixtures
-          curl -fsSL "https://codeload.github.com/basecamp/once-campfire/tar.gz/${CAMPFIRE_SHA}" -o /tmp/cf.tgz
-          mkdir -p split-fixtures/campfire && tar -xzf /tmp/cf.tgz -C split-fixtures/campfire --strip-components=1
-          RH=$PWD/target/release/roundhouse
-          mkdir -p out logs src
-          emit() { $RH --target spinel "src/$1" -o "out/$1" --allow-unsupported 2>&1 | tail -1; }
-          cp -r split-fixtures/real-blog src/blog
-          cp -r split-fixtures/real-blog src/blog-view && echo '<p>Warm start</p>' >> src/blog-view/app/views/articles/show.html.erb
-          cp -r split-fixtures/real-blog src/blog-model && perl -0pi -e 's/\nend\s*\z/\n  def shout_title = title.to_s.upcase\nend\n/' src/blog-model/app/models/article.rb \
-            && echo '<p><%= @article.shout_title %></p>' >> src/blog-model/app/views/articles/show.html.erb
-          for a in blog blog-view blog-model; do emit $a; done
-          diff -r out/blog out/blog-model | head -20 || true
-      - name: Cold and warm compiles of main.rb
+          mkdir -p out logs
+          target/release/roundhouse --target spinel split-fixtures/real-blog -o out/blog 2>&1 | tail -1
+      - name: Rounds and perf
         run: |
-          run() {  # app tag [env]
-            local a=$1 t=$2; shift 2
-            ( cd out/$a && rbs=""; [ -d sig ] && rbs="--rbs sig"
-              /usr/bin/time -f "wall=%e rss=%M" env "$@" $GITHUB_WORKSPACE/sp/spinel main.rb $rbs -c -o /tmp/$t.c --force --timing ) > logs/$t.log 2>&1 || echo "$t FAILED"
-            echo "$t $(grep -o 'phase=analysis ms=[0-9.]*' logs/$t.log) $(grep -o 'phase=analysis_fixpoint ms=[0-9.]* rounds=[0-9]*' logs/$t.log) $(grep -o 'seeded=.*' logs/$t.log) $(grep -o 'wall=.*' logs/$t.log)"
-          }
-          same() { cmp -s /tmp/$1.c /tmp/$2.c && echo "C $1 == $2" || echo "C $1 != $2 ($(diff /tmp/$1.c /tmp/$2.c | grep -c '^[<>]') lines)"; }
-          {
-          run blog blog-cold SP_WARM_SAVE=/tmp/w-blog.txt
-          run blog blog-conc SP_WARM_MODE=concrete SP_WARM_LOAD=/tmp/w-blog.txt; same blog-cold blog-conc
-          run blog-view blog-view-cold
-          run blog-view blog-view-conc SP_WARM_MODE=concrete SP_WARM_LOAD=/tmp/w-blog.txt; same blog-view-cold blog-view-conc
-          } | tee logs/summary.txt
-      - name: The tests, cold and warm
-        run: |
-          cat > /tmp/spw <<'W'
-          #!/bin/bash
-          o=; prev=; for a in "$@"; do [ "$prev" = -o ] && o=$a; prev=$a; done
-          w=/tmp/warm/$(basename "$o").txt; mkdir -p /tmp/warm
-          if [ "$WARM" = save ]; then export SP_WARM_SAVE=$w; elif [ -n "$WARM" ] && [ -f "$w" ]; then export SP_WARM_LOAD=$w; [ "$WARM" = concrete ] && export SP_WARM_MODE=concrete; fi
-          s=$(date +%s.%N); "$GITHUB_WORKSPACE/sp/spinel" "$@" --timing 2> >(grep -E 'phase=analysis_fixpoint|warm_seed|refus|error' >&2); r=$?
-          echo "spw $(basename "$o") warm=${WARM:-none} sec=$(echo "$(date +%s.%N) - $s" | bc)" >&2; exit $r
-          W
-          chmod +x /tmp/spw
-          t() {  # app warm tag
-            ( cd out/$1 && rm -rf build && WARM=$2 timeout 3000 make spinel-test SPINEL=/tmp/spw ) > logs/test-$3.log 2>&1 && r=PASS || r=FAIL
-            echo "test $3: $r $(grep -c '^spw' logs/test-$3.log) builds, $(grep -o 'sec=[0-9.]*' logs/test-$3.log | cut -d= -f2 | paste -sd+ | bc) s, rounds $(grep -o 'rounds=[0-9]*' logs/test-$3.log | cut -d= -f2 | paste -sd,)"
-          }
-          {
-          t blog save blog-cold
-          t blog-view "" blog-view-cold
-          t blog-view full blog-view-warm
-          t blog-model "" blog-model-cold
-          t blog-model full blog-model-warm
-          t blog full blog-warm
-          } | tee -a logs/summary.txt
+          sudo apt-get install -yq linux-tools-common linux-tools-$(uname -r) || sudo apt-get install -yq linux-tools-azure
+          sudo sysctl kernel.perf_event_paranoid=-1
+          cd out/blog
+          $GITHUB_WORKSPACE/sp/spinel main.rb -c -o /tmp/blog.c --force --timing 2> $GITHUB_WORKSPACE/logs/timing.log
+          perf record -F 499 --call-graph fp -o /tmp/perf.data -- $GITHUB_WORKSPACE/sp/spinel main.rb -c -o /tmp/blogp.c --force > /dev/null 2>&1
+          perf report -i /tmp/perf.data --no-children --sort symbol --stdio -g none 2>/dev/null | grep -v '^$' | grep -v '^#' | head -120 > $GITHUB_WORKSPACE/logs/perf-self.txt
+          perf report -i /tmp/perf.data --children --sort symbol --stdio -g none 2>/dev/null | grep -v '^$' | grep -v '^#' | head -200 > $GITHUB_WORKSPACE/logs/perf-children.txt
+          perf script -i /tmp/perf.data -F ip,sym 2>/dev/null | awk 'NF==0{ if (n) { s=st[n]; for (i=n-1;i>=1;i--) s=s ";" st[i]; c[s]++ } n=0; next } { n++; st[n]=$2 } END{ for (k in c) print c[k], k }' | gzip > $GITHUB_WORKSPACE/logs/folded.txt.gz
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: warm-start-2
+          name: rounds-perf-1
           path: logs
