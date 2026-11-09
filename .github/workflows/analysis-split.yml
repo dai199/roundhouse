@@ -33,15 +33,11 @@ jobs:
           SP_TOUCH_TRACE=1 timeout 1200 $GITHUB_WORKSPACE/sp/spinel main.rb -c -o /tmp/blog.c --force --timing 2> /tmp/tr.log || true
           grep -A12 "touch-trace: round=1[23] " /tmp/tr.log | head -400 > $GITHUB_WORKSPACE/logs/trace-raw.txt
           bin=$(readlink -f $GITHUB_WORKSPACE/sp/spinel)
-          while IFS= read -r l; do
-            case "$l" in touch-trace*|--) echo "$l";; *)
-              off=$(echo "$l" | grep -o '(+0x[0-9a-f]*)' | tr -d '(+)'); fn=$(echo "$l" | grep -o '([a-zA-Z_][a-zA-Z0-9_.]*+0x[0-9a-f]*)')
-              if [ -n "$off" ]; then echo "  $(addr2line -f -i -C -e "$bin" "$off" | paste -sd' ' | cut -c1-200)"; else echo "  $fn"; fi;;
-            esac
-          done < $GITHUB_WORKSPACE/logs/trace-raw.txt > $GITHUB_WORKSPACE/logs/trace.txt
+          grep -o '(+0x[0-9a-f]*)' $GITHUB_WORKSPACE/logs/trace-raw.txt | tr -d '(+)' | sort | uniq -c | sort -rn > /tmp/offs.txt || true
+          while read -r n off; do echo "$n $off $(addr2line -f -i -C -e "$bin" "$off" | paste -sd' ' | cut -c1-300)"; done < /tmp/offs.txt > $GITHUB_WORKSPACE/logs/trace.txt || true
           grep -c "touch-trace" /tmp/tr.log
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: touch-trace-1
+          name: touch-trace-2
           path: logs
