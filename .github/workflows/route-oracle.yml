@@ -89,7 +89,9 @@ jobs:
         working-directory: roundhouse
         run: |
           cargo build --release --bin dump_routes
-          target/release/dump_routes --continue ../app > ../roundhouse.txt 2> ../roundhouse.err || { tail -40 ../roundhouse.err; exit 1; }
+          target/release/dump_routes --continue --mapper ../app > ../roundhouse.txt 2> ../roundhouse.err || { tail -40 ../roundhouse.err; exit 1; }
+          grep '^mapper:' ../roundhouse.err | cut -c1-400
+          echo "gems that reopen the mapper:"; grep -rlE "class (ActionDispatch::Routing::)?Mapper\b|Routing::Mapper\.(include|send|prepend)" ../app/vendor/bundle/ruby/*/gems/*/lib | sed 's#.*/gems/##' | cut -d/ -f1 | sort -u
           wc -l ../roundhouse.txt
       - name: Compare
         run: |

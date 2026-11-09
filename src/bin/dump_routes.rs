@@ -31,6 +31,14 @@ fn main() {
             let gaps = roundhouse::ingest::survey::drain();
             eprint!("{}", roundhouse::ingest::survey::render_report(&gaps));
         }
+        // `--mapper`: what reopens `ActionDispatch::Routing::Mapper`, where a gem's routing methods (`devise_for`) come from.
+        if args.iter().any(|a| a == "--mapper") {
+            for lc in app.library_classes.iter().filter(|lc| lc.name.0.as_str().contains("Routing::Mapper") || lc.methods.iter().any(|m| m.name.as_str().starts_with("devise"))) {
+                let methods: Vec<&str> = lc.methods.iter().map(|m| m.name.as_str()).collect();
+                eprintln!("mapper: {} origin={:?} methods={}", lc.name.0.as_str(), lc.origin, methods.join(","));
+            }
+            eprintln!("mapper: auto_source_gems={}", app.auto_source_gems.join(","));
+        }
         let guarded: Vec<(String, String)> = roundhouse::lower::routes::flatten_routes_asking_guards(&app)
             .into_iter()
             .filter(|(_, guards)| !guards.is_empty())
