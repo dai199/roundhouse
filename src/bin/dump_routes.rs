@@ -29,6 +29,11 @@ fn main() {
         };
         if surveying {
             let gaps = roundhouse::ingest::survey::drain();
+            if args.iter().any(|a| a == "--mapper") {
+                for gap in gaps.iter().map(|g| g.to_string()).filter(|g| g.contains("routes DSL")) {
+                    eprintln!("mapper: gap {gap}");
+                }
+            }
             eprint!("{}", roundhouse::ingest::survey::render_report(&gaps));
         }
         // `--mapper`: what reopens `ActionDispatch::Routing::Mapper`, where a gem's routing methods (`devise_for`) come from.
