@@ -87,15 +87,27 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: roundhouse's routes
         working-directory: roundhouse
+        env:
+          # The gems roundhouse reads from source here, one family at a time: every other bundled gem
+          # stays unread, so a gem not yet in scope (omniauth) cannot change how these evaluate.
+          SOURCE_GEMS: devise warden orm_adapter responders devise_invitable devise-two-factor rotp devise_token_auth devise-secure_password devise_pam_authenticatable2
         run: |
           cargo build --release --bin dump_routes
-          RH_DEBUG_GEM_DSL=1 target/release/dump_routes --continue --mapper ../app > ../roundhouse.txt 2> ../roundhouse.err || { tail -40 ../roundhouse.err; exit 1; }
+          G=$RUNNER_TEMP/source-gems
+          for g in $SOURCE_GEMS; do
+            v=$(sed -n "s/^    $g (\([^)]*\))$/\1/p" ../app/Gemfile.lock | head -1)
+            [ -n "$v" ] && gem install -q --install-dir $G --no-document --ignore-dependencies $g -v $v && echo "source gem: $g $v"
+          done
+          # Not the app's whole bundle: BUNDLE_PATH would hand roundhouse every installed gem.
+          mv ../app/.bundle/config ../app/.bundle/config.oracle
+          env -u GEM_HOME GEM_PATH=$G RH_DEBUG_GEM_DSL=1 target/release/dump_routes --continue --mapper ../app > ../roundhouse.txt 2> ../roundhouse.err || { tail -40 ../roundhouse.err; exit 1; }
+          mv ../app/.bundle/config.oracle ../app/.bundle/config
           grep -E '^(mapper|gem_dsl):' ../roundhouse.err | cut -c1-600
-          echo "gems that reopen the mapper:"; grep -rlE "class (ActionDispatch::Routing::)?Mapper\b|Routing::Mapper\.(include|send|prepend)" ../app/vendor/bundle/ruby/*/gems/*/lib | sed 's#.*/gems/##' | cut -d/ -f1 | sort -u
           wc -l ../roundhouse.txt
       - name: Compare
         run: |
-          ruby roundhouse/scripts/route-oracle/compare.rb rails.txt roundhouse.txt | tee compare.txt
+          # omniauth is the next gem in: its callback routes are counted apart until it is read from source.
+          ORACLE_OUT_OF_SCOPE='[Oo]mniauth|/auth/:provider|/omniauth/' ruby roundhouse/scripts/route-oracle/compare.rb rails.txt roundhouse.txt | tee compare.txt
           { echo "## ${{ matrix.app }}"; echo '```'; head -200 compare.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
