@@ -1,5 +1,5 @@
 //! `dump_routes` — the routes roundhouse reads from a Rails app, one per line, in the shape
-//! `scripts/route-oracle/rails_routes.rb` prints Rails' own: `VERB PATH controller#action NAME STATE`.
+//! `scripts/route-oracle/rails_routes.rb` prints Rails' own: `VERB PATH Controller#action NAME STATE`.
 //! `scripts/route-oracle/compare.rb` lines the two up.
 //!
 //!     cargo run --bin dump_routes -- [--continue] APP
@@ -40,7 +40,9 @@ fn main() {
                 Some((why, _)) => format!("refused:{}", why.replace(' ', "_")),
             };
             let name = if route.named { route.as_name.as_str() } else { "-" };
-            println!("{verb} {} {}#{} {name} {state}", route.path, controller_path(route.controller.0.as_str()), route.action);
+            let class = route.controller.0.as_str();
+            let endpoint = if class == "RoundhouseRedirectsController" { "REDIRECT".to_string() } else { format!("{class}#{}", route.action) };
+            println!("{verb} {} {endpoint} {name} {state}", route.path);
         }
     })
 }
@@ -56,15 +58,4 @@ fn verb(method: HttpMethod) -> &'static str {
         HttpMethod::Options => "OPTIONS",
         HttpMethod::Any => "ANY",
     }
-}
-
-/// `Admin::UsersController` → `admin/users`, as Rails' `defaults[:controller]` names it.
-fn controller_path(class: &str) -> String {
-    class
-        .strip_suffix("Controller")
-        .unwrap_or(class)
-        .split("::")
-        .map(roundhouse::naming::underscore)
-        .collect::<Vec<_>>()
-        .join("/")
 }

@@ -21,12 +21,14 @@ end
 
 rails = read(ARGV.fetch(0)).reject { |r| %w[INTERNAL ENGINE RACK].include?(r.endpoint) }
 ours = read(ARGV.fetch(1))
+# A route roundhouse knows it cannot run (`RoundhouseUnmodeledEndpoint`) is reported, not served.
+unmodeled, ours = ours.partition { |r| r.endpoint.start_with?("RoundhouseUnmodeledEndpointController#") }
 served = ours.reject { |r| r.state.start_with?("refused") }
 
 first = ->(routes) { routes.each_with_object({}) { |r, h| h[r.key] ||= r } }
 rails_first, ours_first = first.(rails), first.(served)
 
-missing = rails_first.reject { |k, _| ours_first.key?(k) }.values
+missing = rails_first.reject { |k, _| ours_first.key?(k) || unmodeled.any? { |u| u.key == k } }.values
 extra = ours_first.reject { |k, _| rails_first.key?(k) }.values
 wrong = rails_first.filter_map { |k, r| (o = ours_first[k]) && o.endpoint != r.endpoint ? [r, o] : nil }
 refused = ours.select { |r| r.state.start_with?("refused") }.group_by(&:state).transform_values(&:size)
@@ -37,6 +39,7 @@ names_missing = rails_names.keys - our_names.keys
 names_moved = rails_names.select { |n, s| our_names[n] && our_names[n] != s }.keys
 
 puts "rails #{rails_first.size} routes, roundhouse #{ours_first.size} served (#{refused.values.sum} refused: #{refused.map { |k, v| "#{k.sub("refused:", "")} #{v}" }.join(", ")})"
+puts "known unmodeled endpoints #{unmodeled.size}, guarded #{served.count { |r| r.state == "guarded" }}"
 puts "missing #{missing.size}, extra #{extra.size}, different endpoint #{wrong.size}, helpers missing #{names_missing.size}, helpers at another path #{names_moved.size}"
 puts "\n## missing (Rails serves, roundhouse does not)"; missing.each { |r| puts "  #{r.verb} #{r.path} #{r.endpoint}#{ours.any? { |o| o.key == r.key } ? "  [refused here]" : ""}" }
 puts "\n## extra (roundhouse serves, Rails does not)"; extra.each { |r| puts "  #{r.verb} #{r.path} #{r.endpoint}" }

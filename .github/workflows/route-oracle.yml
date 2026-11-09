@@ -19,12 +19,15 @@ jobs:
           - app: mastodon
             repo: mastodon/mastodon
             sha: bc0df90
+            ruby: "4.0"
           - app: chatwoot
             repo: chatwoot/chatwoot
             sha: ed7b122
+            ruby: "3.4"
           - app: forem
             repo: forem/forem
             sha: a017eda
+            ruby: "3.3"
     services:
       postgres:
         image: postgres:16
@@ -62,10 +65,15 @@ jobs:
       - uses: ruby/setup-ruby@v1
         with:
           working-directory: app
+          # The runner has the latest patch of each minor, not every locked one.
+          ruby-version: ${{ matrix.ruby }}
           bundler-cache: false
       - name: Bundle install into the app's vendor/bundle (where roundhouse reads source gems)
         working-directory: app
         run: |
+          echo "${{ matrix.ruby }}" > .ruby-version
+          # A pinned patch (`ruby "3.4.4"`) refuses the runner's; the lockfile still fixes every gem.
+          sed -i -E '/^ruby /d' Gemfile
           bundle config set --local path vendor/bundle
           bundle config set --local deployment false
           bundle install --jobs 4 --retry 2
@@ -73,7 +81,7 @@ jobs:
         working-directory: app
         run: |
           bundle exec rails db:create >/dev/null 2>&1 || true
-          bundle exec rails runner ../roundhouse/scripts/route-oracle/rails_routes.rb > ../rails.txt 2> ../rails.err || { tail -40 ../rails.err; exit 1; }
+          ORACLE_OUT=$PWD/../rails.txt bundle exec rails runner ../roundhouse/scripts/route-oracle/rails_routes.rb > ../rails.err 2>&1 || { tail -40 ../rails.err; exit 1; }
           wc -l ../rails.txt
       - uses: dtolnay/rust-toolchain@stable
       - name: roundhouse's routes

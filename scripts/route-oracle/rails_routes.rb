@@ -1,6 +1,7 @@
 # Rails' own route table, one route per line in `dump_routes`' shape:
 #   VERB PATH controller#action NAME
-# Run inside the app: `bin/rails runner path/to/rails_routes.rb > rails.txt`.
+# Run inside the app: `ORACLE_OUT=rails.txt bin/rails runner path/to/rails_routes.rb`
+# (a file, not stdout, which the app's own boot logging shares).
 # `(.:format)` is dropped and every other optional group is expanded, as
 # roundhouse flattens them. Engine mounts and Rails' own internal routes
 # are printed with `ENGINE`/`INTERNAL` in place of the endpoint.
@@ -19,6 +20,7 @@ def expansions(spec)
 end
 
 Rails.application.reload_routes! if Rails.application.respond_to?(:reload_routes!)
+out = File.open(ENV.fetch("ORACLE_OUT"), "w")
 Rails.application.routes.routes.each do |route|
   spec = route.path.spec.to_s.sub(/\(\.:format\)\z/, "")
   verbs = route.verb.to_s.empty? ? ["ANY"] : route.verb.to_s.split("|")
@@ -27,14 +29,18 @@ Rails.application.routes.routes.each do |route|
       "INTERNAL"
     elsif route.app.respond_to?(:engine?) && route.app.engine?
       "ENGINE"
+    elsif route.app.app.is_a?(ActionDispatch::Routing::Redirect)
+      "REDIRECT"
     elsif route.defaults[:controller]
-      "#{route.defaults[:controller]}##{route.defaults[:action]}"
+      # The class, as roundhouse names it: Rails' path spelling follows the route's `module`.
+      "#{"#{route.defaults[:controller]}_controller".camelize}##{route.defaults[:action]}"
     else
       "RACK"
     end
   name = route.name.to_s.empty? ? "-" : route.name
   expansions(spec).uniq.each do |path|
     path = "/" if path.empty?
-    verbs.each { |verb| puts "#{verb} #{path} #{endpoint} #{name}" }
+    verbs.each { |verb| out.puts "#{verb} #{path} #{endpoint} #{name}" }
   end
 end
+out.close
