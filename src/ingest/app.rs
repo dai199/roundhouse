@@ -604,7 +604,11 @@ pub fn ingest_app_with_vfs<V: Vfs + ?Sized>(vfs: &V, dir: &Path) -> IngestResult
     let mut auto: Vec<String> = Vec::new();
     loop {
         let marks = (super::survey::mark(), super::prism::mark());
-        let mut app = match ingest_rails_app(vfs, dir, &auto) {
+        let pass = ingest_rails_app(vfs, dir, &auto);
+        if std::env::var_os("RH_DEBUG_GEM_DSL").is_some() {
+            eprintln!("gem_dsl: pass with {} auto gems ({}) -> {}", auto.len(), auto.join(","), if pass.is_ok() { "ok".to_string() } else { format!("err {}", pass.as_ref().err().map(|e| e.to_string()).unwrap_or_default()) });
+        }
+        let mut app = match pass {
             Ok(app) => app,
             Err(err) => {
                 let strict = super::prism::mark();

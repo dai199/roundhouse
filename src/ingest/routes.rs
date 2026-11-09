@@ -2452,6 +2452,11 @@ thread_local! {
 
 /// The routing methods gems add to the mapper (`ingest::gem_routes`), read in place for later.
 pub(super) fn set_gem_dsl(names: HashSet<String>) {
+    if std::env::var_os("RH_DEBUG_GEM_DSL").is_some() {
+        let mut sorted: Vec<&String> = names.iter().collect();
+        sorted.sort();
+        eprintln!("gem_dsl: {} names, devise_for={} mount_devise_token_auth_for={}", names.len(), names.contains("devise_for"), names.contains("mount_devise_token_auth_for"));
+    }
     GEM_DSL.with(|g| *g.borrow_mut() = names);
 }
 
