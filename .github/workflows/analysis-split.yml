@@ -6,7 +6,7 @@ permissions:
   contents: read
 env:
   CAMPFIRE_SHA: c8f74a0b0e1e93146c4d7c1d6ac80c9079682216
-  BRANCHES: cvb-prefilter oa-put-back
+  BRANCHES: imemo-deps16
 jobs:
   measure:
     runs-on: ubuntu-latest
@@ -53,5 +53,5 @@ jobs:
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: speed-cmp-1
+          name: speed-cmp-2
           path: logs
