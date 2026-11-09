@@ -21,7 +21,7 @@ jobs:
           sudo apt-get update -q && sudo apt-get install -yq libsqlite3-dev libyaml-dev
           git clone -q https://github.com/matz/spinel sp
           for br in $BRANCHES; do git -C sp fetch -q https://github.com/dai199/spinel "$br:$br"; done
-          git -C sp merge-base $BRANCHES > /tmp/base.sha; cat /tmp/base.sha
+          git -C sp merge-base --octopus HEAD $BRANCHES > /tmp/base.sha; cat /tmp/base.sha
           find sp/test -name '*.rb' | sed 's|^sp/||' | sort > /tmp/tests.txt
       - name: Emit
         run: |
@@ -53,5 +53,5 @@ jobs:
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: speed-cmp-2
+          name: speed-cmp-3
           path: logs
