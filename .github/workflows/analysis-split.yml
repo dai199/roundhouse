@@ -34,11 +34,9 @@ jobs:
           cp -r split-fixtures/real-blog src/blog-view && echo '<p>Warm start</p>' >> src/blog-view/app/views/articles/show.html.erb
           cp -r split-fixtures/real-blog src/blog-model && perl -0pi -e 's/\nend\s*\z/\n  def shout_title = title.to_s.upcase\nend\n/' src/blog-model/app/models/article.rb \
             && echo '<p><%= @article.shout_title %></p>' >> src/blog-model/app/views/articles/show.html.erb
-          cp -r split-fixtures/campfire src/cf
-          cp -r split-fixtures/campfire src/cf-view && v=$(ls src/cf-view/app/views/rooms/*.html.erb | head -1) && echo "$v" && echo '<p>Warm start</p>' >> "$v"
-          for a in blog blog-view blog-model cf cf-view; do emit $a; done
+          for a in blog blog-view blog-model; do emit $a; done
           diff -r out/blog out/blog-model | head -20 || true
-      - name: Cold and warm compiles
+      - name: Cold and warm compiles of main.rb
         run: |
           run() {  # app tag [env]
             local a=$1 t=$2; shift 2
@@ -49,21 +47,35 @@ jobs:
           same() { cmp -s /tmp/$1.c /tmp/$2.c && echo "C $1 == $2" || echo "C $1 != $2 ($(diff /tmp/$1.c /tmp/$2.c | grep -c '^[<>]') lines)"; }
           {
           run blog blog-cold SP_WARM_SAVE=/tmp/w-blog.txt
-          run blog blog-warm SP_WARM_LOAD=/tmp/w-blog.txt; same blog-cold blog-warm
+          run blog blog-conc SP_WARM_MODE=concrete SP_WARM_LOAD=/tmp/w-blog.txt; same blog-cold blog-conc
           run blog-view blog-view-cold
-          run blog-view blog-view-warm SP_WARM_LOAD=/tmp/w-blog.txt; same blog-view-cold blog-view-warm
-          run blog-model blog-model-cold
-          run blog-model blog-model-warm SP_WARM_LOAD=/tmp/w-blog.txt; same blog-model-cold blog-model-warm
-          run cf cf-cold SP_WARM_SAVE=/tmp/w-cf.txt
-          run cf cf-warm SP_WARM_LOAD=/tmp/w-cf.txt; same cf-cold cf-warm
-          run cf-view cf-view-cold
-          run cf-view cf-view-warm SP_WARM_LOAD=/tmp/w-cf.txt; same cf-view-cold cf-view-warm
+          run blog-view blog-view-conc SP_WARM_MODE=concrete SP_WARM_LOAD=/tmp/w-blog.txt; same blog-view-cold blog-view-conc
           } | tee logs/summary.txt
-          cp /tmp/w-blog.txt /tmp/w-cf.txt logs/ || true
-          for p in blog-cold:blog-warm blog-view-cold:blog-view-warm blog-model-cold:blog-model-warm cf-cold:cf-warm cf-view-cold:cf-view-warm; do
-            diff /tmp/${p%%:*}.c /tmp/${p##*:}.c | head -200 > logs/diff-${p%%:*}.txt || true; done
+      - name: The tests, cold and warm
+        run: |
+          cat > /tmp/spw <<'W'
+          #!/bin/bash
+          o=; prev=; for a in "$@"; do [ "$prev" = -o ] && o=$a; prev=$a; done
+          w=/tmp/warm/$(basename "$o").txt; mkdir -p /tmp/warm
+          if [ "$WARM" = save ]; then export SP_WARM_SAVE=$w; elif [ -n "$WARM" ] && [ -f "$w" ]; then export SP_WARM_LOAD=$w; [ "$WARM" = concrete ] && export SP_WARM_MODE=concrete; fi
+          s=$(date +%s.%N); "$GITHUB_WORKSPACE/sp/spinel" "$@" --timing 2> >(grep -E 'phase=analysis_fixpoint|warm_seed|refus|error' >&2); r=$?
+          echo "spw $(basename "$o") warm=${WARM:-none} sec=$(echo "$(date +%s.%N) - $s" | bc)" >&2; exit $r
+          W
+          chmod +x /tmp/spw
+          t() {  # app warm tag
+            ( cd out/$1 && rm -rf build && WARM=$2 timeout 3000 make spinel-test SPINEL=/tmp/spw ) > logs/test-$3.log 2>&1 && r=PASS || r=FAIL
+            echo "test $3: $r $(grep -c '^spw' logs/test-$3.log) builds, $(grep -o 'sec=[0-9.]*' logs/test-$3.log | cut -d= -f2 | paste -sd+ | bc) s, rounds $(grep -o 'rounds=[0-9]*' logs/test-$3.log | cut -d= -f2 | paste -sd,)"
+          }
+          {
+          t blog save blog-cold
+          t blog-view "" blog-view-cold
+          t blog-view full blog-view-warm
+          t blog-model "" blog-model-cold
+          t blog-model full blog-model-warm
+          t blog full blog-warm
+          } | tee -a logs/summary.txt
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: warm-start-1
+          name: warm-start-2
           path: logs
