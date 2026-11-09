@@ -76,7 +76,8 @@ jobs:
           sed -i -E '/^ruby /d' Gemfile
           bundle config set --local path vendor/bundle
           bundle config set --local deployment false
-          bundle install --jobs 4 --retry 2
+          # gcc 14 makes an old extension's mismatched callback pointer an error.
+          CFLAGS="-Wno-error=incompatible-pointer-types" bundle install --jobs 4 --retry 2
       - name: Rails' routes
         working-directory: app
         run: |

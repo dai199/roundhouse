@@ -27,6 +27,10 @@ fn main() {
                 std::process::exit(1);
             }
         };
+        if surveying {
+            let gaps = roundhouse::ingest::survey::drain();
+            eprint!("{}", roundhouse::ingest::survey::render_report(&gaps));
+        }
         let guarded: Vec<(String, String)> = roundhouse::lower::routes::flatten_routes_asking_guards(&app)
             .into_iter()
             .filter(|(_, guards)| !guards.is_empty())
