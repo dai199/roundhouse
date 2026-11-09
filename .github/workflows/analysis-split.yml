@@ -27,18 +27,21 @@ jobs:
           tar -xzf split-fixtures/real-blog.tar.gz -C split-fixtures
           mkdir -p out logs
           target/release/roundhouse --target spinel split-fixtures/real-blog -o out/blog 2>&1 | tail -1
-      - name: Rounds and perf
+      - name: Trace the program-wide moves
         run: |
-          sudo apt-get install -yq linux-tools-common linux-tools-$(uname -r) || sudo apt-get install -yq linux-tools-azure
-          sudo sysctl kernel.perf_event_paranoid=-1
           cd out/blog
-          $GITHUB_WORKSPACE/sp/spinel main.rb -c -o /tmp/blog.c --force --timing 2> $GITHUB_WORKSPACE/logs/timing.log
-          perf record -F 499 --call-graph fp -o /tmp/perf.data -- $GITHUB_WORKSPACE/sp/spinel main.rb -c -o /tmp/blogp.c --force > /dev/null 2>&1
-          perf report -i /tmp/perf.data --no-children --sort symbol --stdio -g none 2>/dev/null | grep -v '^$' | grep -v '^#' | head -120 > $GITHUB_WORKSPACE/logs/perf-self.txt
-          perf report -i /tmp/perf.data --children --sort symbol --stdio -g none 2>/dev/null | grep -v '^$' | grep -v '^#' | head -200 > $GITHUB_WORKSPACE/logs/perf-children.txt
-          perf script -i /tmp/perf.data -F ip,sym 2>/dev/null | awk 'NF==0{ if (n) { s=st[n]; for (i=n-1;i>=1;i--) s=s ";" st[i]; c[s]++ } n=0; next } { n++; st[n]=$2 } END{ for (k in c) print c[k], k }' | gzip > $GITHUB_WORKSPACE/logs/folded.txt.gz
+          SP_TOUCH_TRACE=1 timeout 1200 $GITHUB_WORKSPACE/sp/spinel main.rb -c -o /tmp/blog.c --force --timing 2> /tmp/tr.log || true
+          grep -A12 "touch-trace: round=1[23] " /tmp/tr.log | head -400 > $GITHUB_WORKSPACE/logs/trace-raw.txt
+          bin=$(readlink -f $GITHUB_WORKSPACE/sp/spinel)
+          while IFS= read -r l; do
+            case "$l" in touch-trace*|--) echo "$l";; *)
+              off=$(echo "$l" | grep -o '(+0x[0-9a-f]*)' | tr -d '(+)'); fn=$(echo "$l" | grep -o '([a-zA-Z_][a-zA-Z0-9_.]*+0x[0-9a-f]*)')
+              if [ -n "$off" ]; then echo "  $(addr2line -f -i -C -e "$bin" "$off" | paste -sd' ' | cut -c1-200)"; else echo "  $fn"; fi;;
+            esac
+          done < $GITHUB_WORKSPACE/logs/trace-raw.txt > $GITHUB_WORKSPACE/logs/trace.txt
+          grep -c "touch-trace" /tmp/tr.log
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: rounds-perf-2
+          name: touch-trace-1
           path: logs
