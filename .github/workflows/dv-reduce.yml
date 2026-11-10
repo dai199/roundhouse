@@ -1,0 +1,33 @@
+name: dv-reduce
+on:
+  push:
+    branches: [dv-reduce]
+permissions:
+  contents: read
+jobs:
+  reduce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '4.0'
+      - name: Build both Spinels
+        run: |
+          sudo apt-get update -q && sudo apt-get install -yq libsqlite3-dev libyaml-dev
+          git clone -q https://github.com/matz/spinel bad
+          git clone -q https://github.com/matz/spinel good && git -C good checkout -q 036c65df9
+          for d in bad good; do make -C $d deps >/dev/null && make -C $d -j4 bin/spinel >/dev/null; done
+          git -C bad log -1 --oneline
+      - name: Reduce
+        run: |
+          mkdir w && tar -xzf tree.tar.gz -C w
+          export BAD=$PWD/bad/spinel GOOD=$PWD/good/spinel
+          (cd w && ../judge.sh) || { echo "does not reproduce"; exit 1; }
+          timeout 20000 ruby tools/ruby_reduce.rb --dir w --test "$PWD/judge.sh" --files files.txt 2>&1 | tail -40 || true
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: reduced
+          path: w
