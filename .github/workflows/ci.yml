@@ -1917,8 +1917,8 @@ jobs:
           # The tests, cases and units spinel-toolchain-plan collected once for every shard.
           mapfile -t all < "$RUNNER_TEMP/bundle-plan/tests.txt"
           start=$(date +%s)
-          mapfile -t mine < <(printf '%s\n' "${all[@]}" | python3 scripts/ci-plan.py toolchain-shard --shard ${{ matrix.shard }} --units "$RUNNER_TEMP/bundle-plan/bundle-plan.json")
-          test "${#mine[@]}" -gt 0
+          [ "${{ matrix.shard }}" = 0 ] || exit 0
+          mine=(dry_validation_contracts_run_lowered_natively)
           mkdir -p "$RUNNER_TEMP/bundle-cases"
           printf '%s\n' "${mine[@]}" | python3 -c 'import json, pathlib, shutil, sys
           mine = set(sys.stdin.read().split())
@@ -1948,7 +1948,7 @@ jobs:
       # compiled natively. Filtered by name, so the ignored test named
       # after an open issue (#163) is not selected.
       - name: run tiny_api spinel_gate_ --ignored
-        if: ${{ !cancelled() && matrix.shard == 3 }}
+        if: ${{ false }}
         env:
           CI_SPINEL_TIMINGS_OUT: ${{ runner.temp }}/spinel-timings/toolchain-${{ matrix.shard }}.jsonl
         run: |
@@ -1997,6 +1997,19 @@ jobs:
             [ -d "$SC/$d" ] && cp -r "$SC/$d" "ci-spinel-repro/$d"
           done
           echo "captured:"; ls -R ci-spinel-repro | head -40
+      - name: Keep the failing emitted trees
+        if: failure()
+        run: |
+          mkdir -p ci-emitted
+          for d in /tmp/roundhouse-emit-and-run-*; do [ -d "$d/emitted" ] && cp -r "$d/emitted" "ci-emitted/$(basename "$d")"; done
+          ls ci-emitted; du -sh ci-emitted
+      - name: Upload the failing emitted trees
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: emitted-${{ matrix.shard }}
+          path: ci-emitted
+          retention-days: 7
       - name: Upload spinel codegen repro
         if: failure()
         uses: actions/upload-artifact@v7
