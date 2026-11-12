@@ -75,6 +75,15 @@ class ShelfTest < ActiveSupport::TestCase
     assert_equal ["can't be blank"], shelf.errors[:position]
   end
 
+  test "a shelf answers to its columns, associations and persistence, not to another table's" do
+    shelf = Shelf.new(aisle: 1, position: 2)
+    assert_respond_to shelf, :aisle
+    assert_respond_to shelf, :items
+    assert_respond_to shelf, :save
+    refute_respond_to shelf, :shelf_id
+    assert_not_respond_to shelf, :weight
+  end
+
   test "a complete shelf is valid" do
     assert_predicate Shelf.new(aisle: 1, position: 2), :valid?
   end
@@ -197,6 +206,7 @@ end
 /// target reports instead (`presence:` on a NOT NULL number,
 /// `uniqueness:`), listed so a fix that closes one moves it here.
 pub const PASSING: &[&str] = &[
+    "shelf::test_a_shelf_answers_to_its_columns_associations_and_persistence_not_to_another_table_s",
     "shelf::test_a_complete_shelf_is_valid",
     "shelf::test_the_same_position_in_another_aisle_is_fine",
     "shelf::test_labelled_finds_by_label",

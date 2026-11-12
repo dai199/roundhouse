@@ -90,3 +90,41 @@ fn record_tests_app_cargo_test_passes_what_it_lowers() {
         assert!(stdout.contains(&format!("tests::{name} ... ok")), "{name}:\n{stdout}");
     }
 }
+
+/// A constant a test names that nothing defines (here a digest class
+/// from a gem the app does not declare) is a `check` error, as the same
+/// constant in the app's own code is. Before, test bodies were not
+/// walked for it, and the Rust project's test build failed on an
+/// undefined type with nothing reported.
+#[test]
+fn an_unresolved_constant_in_a_test_is_reported() {
+    let (_emitted, errors) = rust_record_tests_app::app()
+        .write(
+            "test/models/digest_test.rb",
+            "require \"test_helper\"\n\nclass DigestTest < ActiveSupport::TestCase\n  test \"a digest\" do\n    assert_nil Shelf.labelled(Digest::BLAKE3.hexdigest(\"x\"))\n  end\nend\n",
+        )
+        .emit(roundhouse::project::BuildTarget::Rust);
+    assert!(
+        errors.iter().any(|e| e.contains("constant not supported") && e.contains("Digest::BLAKE3")),
+        "{errors:?}"
+    );
+}
+
+/// `assert_respond_to` / `refute_respond_to` with a Symbol are lowered to
+/// a check on `respond_to?`, which the Rust target answers at emit time
+/// from the model it emitted: its columns, associations and persistence
+/// methods answer `true`; another table's column, `false`.
+#[test]
+fn respond_to_assertions_fold_on_the_rust_target() {
+    let (emitted, errors) = rust_record_tests_app::app().emit(roundhouse::project::BuildTarget::Rust);
+    assert!(errors.is_empty(), "{errors:?}");
+    let test = std::fs::read_to_string(emitted.join("src/tests/shelf.rs")).expect("shelf test");
+    let body = test
+        .split("fn test_a_shelf_answers_to_its_columns")
+        .nth(1)
+        .and_then(|rest| rest.split("#[test]").next())
+        .expect("the respond_to test");
+    assert!(!body.contains(".respond_to") && !body.contains("respond_to_pred("), "every respond_to? folded:\n{body}");
+    assert_eq!(body.matches("; true }").count(), 3, "{body}");
+    assert_eq!(body.matches("; false }").count(), 2, "{body}");
+}

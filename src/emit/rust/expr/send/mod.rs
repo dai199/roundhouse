@@ -39,6 +39,9 @@ pub(super) fn emit_send(
         let args_s: Vec<String> = args.iter().map(emit_expr).collect();
         return format!("{}({})", emit_expr(recv), args_s.join(", "));
     }
+    if let Some(answer) = model_respond_to(recv, method, args, block) {
+        return answer;
+    }
     // Ruby implicit-self resolves a bare identifier to the enclosing
     // method's parameter when one shares the name (e.g. view partial
     // `def self.article(article, ...)` body references `article` as
@@ -809,4 +812,35 @@ fn raised_class_name(path: &[crate::ident::Symbol]) -> String {
 
 fn is_core_exception(name: &str) -> bool {
     matches!(name, "StandardError" | "Exception" | "TypeError" | "NameError" | "NoMethodError" | "KeyError" | "RangeError" | "ZeroDivisionError" | "FrozenError" | "StopIteration")
+}
+
+/// `record.respond_to?(:name)` on a model, answered at emit time from
+/// the emitted program, as `defined_const_fold` answers `defined?`: the
+/// model's lowered methods (its column readers and writers, associations
+/// and the app's own `def`s), the transpiled `ActiveRecord::Base`, and
+/// the methods the Rust model shim adds. A Rust struct has no runtime
+/// method table to ask. The receiver is still evaluated once, for any
+/// effect it has. Anything else (a computed name, a receiver that is not
+/// a model) keeps the ordinary dispatch.
+fn model_respond_to(recv: Option<&Expr>, method: &str, args: &[Expr], block: Option<&Expr>) -> Option<String> {
+    use crate::expr::Literal;
+    if method != "respond_to?" || block.is_some() {
+        return None;
+    }
+    let recv = recv?;
+    let [arg] = args else { return None };
+    let ExprNode::Lit { value: Literal::Sym { value: name } } = &*arg.node else { return None };
+    let Some(crate::ty::Ty::Class { id, .. }) = recv.ty.as_ref() else { return None };
+    let ctx = super::current_emit_ctx()?;
+    let class = id.0.as_str().rsplit("::").next().unwrap_or(id.0.as_str());
+    let methods = ctx.global_class_methods.get(class)?;
+    // A model: the lowered class carries its table.
+    if !methods.contains_key("table_name") {
+        return None;
+    }
+    let name = name.as_str();
+    let responds = methods.contains_key(name)
+        || ctx.global_class_methods.get("Base").is_some_and(|base| base.contains_key(name))
+        || crate::emit::rust::MODEL_SHIM_INSTANCE_METHODS.contains(&name);
+    Some(format!("{{ let _ = &({}); {responds} }}", emit_expr(recv)))
 }

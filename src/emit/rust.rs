@@ -287,6 +287,14 @@ use crate::session::Session;
 /// progress): adds per-file application code emit through the
 /// `lower_*_to_library_classes` lowerers + the shared
 /// `library::emit_library_class` consumer.
+/// The instance methods the model shim in [`emit`] writes into every
+/// Rust model (by their Ruby names), for `respond_to?` answered at emit
+/// time (`expr::send::model_respond_to`). Keep in step with the shim.
+pub(crate) const MODEL_SHIM_INSTANCE_METHODS: &[&str] = &[
+    "errors", "save", "save!", "destroy", "destroy!", "valid?", "persisted?", "reload", "saved_changes",
+    "id_previously_changed?", "attribute_previously_was",
+];
+
 pub fn emit(app: &App) -> Vec<EmittedFile> {
     // Wedge 2b: route-bearing apps get a real `src/main.rs` that
     // boots tokio + axum and calls `server::start(router::router(),
