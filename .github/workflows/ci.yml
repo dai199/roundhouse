@@ -1057,7 +1057,6 @@ jobs:
           ROUNDHOUSE_PG_TEST_REQUIRED: "1"
           CI_SPINEL_TIMINGS: ${{ needs.plan.outputs.spinel-timings }}
           CI_SPINEL_TIMINGS_OUT: ${{ runner.temp }}/spinel-timings/framework-${{ matrix.shard }}.jsonl
-        env:
           CI_SPINEL_FRAMEWORK_BUDGET: "3300"
         run: scripts/ci-spinel-framework.sh
       # Not !cancelled(): a job past its limit reads as cancelled, and its finished suites' seconds still count.
