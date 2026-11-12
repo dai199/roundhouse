@@ -1,0 +1,40 @@
+name: unit-prof
+on:
+  push:
+    branches: [unit-prof]
+permissions:
+  contents: read
+jobs:
+  prof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-rust
+      - name: Build roundhouse at the test profile's optimization
+        env:
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: "1"
+          CARGO_PROFILE_RELEASE_DEBUG: "line-tables-only"
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          RUSTFLAGS: "-C force-frame-pointers=yes"
+        run: cargo build --release --bin roundhouse
+      - name: Profile
+        run: |
+          sudo apt-get update -q && sudo apt-get install -yq linux-tools-common linux-tools-$(uname -r) || sudo apt-get install -yq linux-tools-generic
+          sudo sysctl kernel.perf_event_paranoid=-1
+          tar -xzf prof-fixtures/real-blog.tar.gz -C prof-fixtures
+          mkdir -p logs
+          for t in ruby spinel; do
+            /usr/bin/time -v target/release/roundhouse --target $t prof-fixtures/real-blog -o out-$t > logs/$t.txt 2>&1 || true
+            tail -25 logs/$t.txt
+          done
+          perf record -F 499 -g -o perf.data -- sh -c 'for i in 1 2 3; do target/release/roundhouse --target ruby prof-fixtures/real-blog -o out-ruby-$i > /dev/null 2>&1; done'
+          perf report -i perf.data --no-children --stdio --percent-limit 0.7 -g none > logs/self.txt 2>/dev/null
+          perf report -i perf.data --children --stdio --percent-limit 2 -g none > logs/children.txt 2>/dev/null
+          head -80 logs/self.txt; head -120 logs/children.txt
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: unit-prof
+          path: logs
