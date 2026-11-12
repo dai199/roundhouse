@@ -199,6 +199,7 @@ pub mod ruby_family_gems;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod gem_refusal;
 pub mod constantize;
+pub mod module_protocol;
 pub mod rooted_constants;
 pub mod params_residue;
 pub mod params_permit;

@@ -706,6 +706,11 @@ impl<'a> Gems<'a> {
                 }
             }
         }
+        // A template runs as a method of `ActionView::Base`: what a gem mixes into it (`on_load(:action_view) { include
+        // SimpleForm::ActionViewExtensions::FormHelper }`) answers the template's receiverless calls.
+        if !app.views.is_empty() && app.library_classes.iter().any(|c| c.name.0.as_str() == "ActionView::Base") {
+            consts.push((None, "ActionView::Base".to_string()));
+        }
         // Not only the app's code: the stack builds each middleware (`Warden::Manager.new(app) { … }`) and calls it.
         for class in &app.gem_middlewares {
             consts.push((None, class.clone()));
