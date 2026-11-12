@@ -14,13 +14,13 @@ if RUBY_ENGINE == "ruby" && (cache = ENV["RH_ISEQ_CACHE"]) && !cache.empty?
   class << RubyVM::InstructionSequence
     def load_iseq(path)
       source = File.binread(path)
-      key = File.join(ENV["RH_ISEQ_CACHE"], Digest::SHA256.hexdigest("#{RUBY_DESCRIPTION}\0#{$VERBOSE.inspect}\0#{path}\0#{source}"))
+      key = File.join(ENV["RH_ISEQ_CACHE"], Digest::SHA256.hexdigest("#{RUBY_DESCRIPTION}\0#{RubyVM::InstructionSequence.compile_option}\0#{$VERBOSE.inspect}\0#{path}\0#{source}"))
       begin
         return RubyVM::InstructionSequence.load_from_binary(File.binread(key))
       rescue Errno::ENOENT
       end
       Thread.current[:roundhouse_iseq_warned] = false
-      iseq = RubyVM::InstructionSequence.compile(source, path, path)
+      iseq = RubyVM::InstructionSequence.compile_file(path)
       # Not cached when compiling warned: a cached load would not warn again.
       unless Thread.current[:roundhouse_iseq_warned]
         tmp = "#{key}.#{Process.pid}.#{Thread.current.object_id}"
