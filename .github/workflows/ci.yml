@@ -618,8 +618,11 @@ jobs:
           # This job installs every prerequisite its tests probe for, so a skip here is a
           # failure: a gem or tool the job stopped providing, not a checkout without it.
           ROUNDHOUSE_REQUIRE_PREREQUISITES: "1"
+          # Each test boots an emitted tree whose runtime files are the same in every test; their compiled code is kept by content.
+          RUBYOPT: -r${{ github.workspace }}/scripts/ci-iseq-cache.rb
+          RH_ISEQ_CACHE: ${{ runner.temp }}/iseq-cache
         run: |
-          mkdir -p "$(dirname "$ROUNDHOUSE_SKIP_LOG")"
+          mkdir -p "$(dirname "$ROUNDHOUSE_SKIP_LOG")" "$RH_ISEQ_CACHE"
           python3 scripts/ci-resources.py --out "$RUNNER_TEMP/unit-resources/tests" -- \
             python3 scripts/ci-unit-tests.py run \
               --archive "$RUNNER_TEMP/unit-tests/unit-tests.tar.zst" \
