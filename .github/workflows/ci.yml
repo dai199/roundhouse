@@ -621,12 +621,24 @@ jobs:
           RH_PHASE_LOG: ${{ runner.temp }}/unit-resources/phases.log
         run: |
           mkdir -p "$(dirname "$ROUNDHOUSE_SKIP_LOG")"
+          sudo apt-get install -yq linux-tools-common linux-tools-$(uname -r) > /dev/null 2>&1 || sudo apt-get install -yq linux-tools-generic > /dev/null 2>&1 || true
+          sudo sysctl kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0 || true
+          sudo perf record -a -F 49 -o /tmp/perf.data > /tmp/perf.log 2>&1 &
+          sleep 2
+          status=0
           python3 scripts/ci-resources.py --out "$RUNNER_TEMP/unit-resources/tests" -- \
             python3 scripts/ci-unit-tests.py run \
               --archive "$RUNNER_TEMP/unit-tests/unit-tests.tar.zst" \
               --inventory "$RUNNER_TEMP/unit-tests/inventory.json" \
               --shard-index ${{ strategy.job-index }} --shard-count ${{ strategy.job-total }} \
-              --report "$RUNNER_TEMP/unit-resources/tests/shard.json"
+              --report "$RUNNER_TEMP/unit-resources/tests/shard.json" || status=$?
+          sudo pkill -INT -f "perf record" || true
+          sleep 15
+          sudo chmod a+r /tmp/perf.data || true
+          perf report -i /tmp/perf.data --sort comm --stdio 2>/dev/null | head -40 > "$RUNNER_TEMP/unit-resources/perf-comm.txt" || true
+          perf report -i /tmp/perf.data --sort comm,dso --stdio 2>/dev/null | head -60 > "$RUNNER_TEMP/unit-resources/perf-dso.txt" || true
+          perf report -i /tmp/perf.data --sort comm,sym --stdio --percent-limit 0.3 2>/dev/null | head -150 > "$RUNNER_TEMP/unit-resources/perf-sym.txt" || true
+          exit $status
       # The partition step already failed for any skip (ROUNDHOUSE_REQUIRE_PREREQUISITES); this
       # names each test and what it was missing.
       - name: Report tests that skipped for a missing prerequisite
