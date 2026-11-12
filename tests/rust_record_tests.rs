@@ -113,7 +113,8 @@ fn an_unresolved_constant_in_a_test_is_reported() {
 /// `assert_respond_to` / `refute_respond_to` with a Symbol are lowered to
 /// a check on `respond_to?`, which the Rust target answers at emit time
 /// from the model it emitted: its columns, associations and persistence
-/// methods answer `true`; another table's column, `false`.
+/// methods answer `true`; another table's column, or a class method
+/// (the model's own `self.labelled`, `Base.find`), `false`.
 #[test]
 fn respond_to_assertions_fold_on_the_rust_target() {
     let (emitted, errors) = rust_record_tests_app::app().emit(roundhouse::project::BuildTarget::Rust);
@@ -126,5 +127,5 @@ fn respond_to_assertions_fold_on_the_rust_target() {
         .expect("the respond_to test");
     assert!(!body.contains(".respond_to") && !body.contains("respond_to_pred("), "every respond_to? folded:\n{body}");
     assert_eq!(body.matches("; true }").count(), 3, "{body}");
-    assert_eq!(body.matches("; false }").count(), 2, "{body}");
+    assert_eq!(body.matches("; false }").count(), 4, "{body}");
 }

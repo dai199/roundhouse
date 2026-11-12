@@ -838,9 +838,15 @@ fn model_respond_to(recv: Option<&Expr>, method: &str, args: &[Expr], block: Opt
     if !methods.contains_key("table_name") {
         return None;
     }
+    // Instance methods only: `global_class_methods` also holds class
+    // methods (`Shelf.labelled`, `Base.find`), which an instance does
+    // not respond to.
     let name = name.as_str();
-    let responds = methods.contains_key(name)
-        || ctx.global_class_methods.get("Base").is_some_and(|base| base.contains_key(name))
+    let instance_has = |class: &str| {
+        ctx.global_instance_methods.get(class).is_some_and(|ms| ms.contains(name))
+    };
+    let responds = instance_has(class)
+        || instance_has("Base")
         || crate::emit::rust::MODEL_SHIM_INSTANCE_METHODS.contains(&name);
     Some(format!("{{ let _ = &({}); {responds} }}", emit_expr(recv)))
 }

@@ -82,6 +82,8 @@ class ShelfTest < ActiveSupport::TestCase
     assert_respond_to shelf, :save
     refute_respond_to shelf, :shelf_id
     assert_not_respond_to shelf, :weight
+    refute_respond_to shelf, :labelled
+    refute_respond_to shelf, :find
   end
 
   test "a complete shelf is valid" do
