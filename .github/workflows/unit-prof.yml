@@ -11,6 +11,7 @@ jobs:
     env:
       CARGO_PROFILE_TEST_SPLIT_DEBUGINFO: "off"
       RUST_MIN_STACK: "33554432"
+      ROUNDHOUSE_TEST_BUNDLE_ROOT: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-rust
