@@ -116,6 +116,7 @@ cp "$tmp/nospinel/spinel" "$tmp/nospinel/spin"
 chmod +x "$tmp/nospinel/spinel" "$tmp/nospinel/spin"
 printf '%s\n' "${parallel[@]}" | xargs -P "$(( $(nproc) * 2 ))" -I{} bash -c 'collect_suite {}'
 cp "$tmp"/collect/*/*.json "$tmp/collect-all/" 2> /dev/null || true
+[ -n "${CI_SPINEL_TIMINGS_OUT:-}" ] && cp -r "$tmp/collect" "${CI_SPINEL_TIMINGS_OUT%.jsonl}-collect"
 now=()
 later=()
 for suite in "${parallel[@]}"; do
