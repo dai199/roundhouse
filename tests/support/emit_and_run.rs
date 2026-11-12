@@ -198,6 +198,7 @@ impl Overlay {
             "# encoding: utf-8\nrequire File.expand_path(\"main\", Dir.pwd)\nMain.configure_default_adapter!\n{}",
             to_completion(script)
         );
+        let t = std::time::Instant::now();
         let output = ruby()
             .arg("-e")
             .arg(&script)
@@ -206,6 +207,7 @@ impl Overlay {
             .envs(env.iter().copied())
             .output()
             .expect("spawn ruby");
+        phase_log(&format!("ruby run={:.3}", t.elapsed().as_secs_f64()));
         Run::new("ruby -e <script>".into(), emitted, errors, output).expecting_completion()
     }
 
@@ -497,16 +499,21 @@ impl Overlay {
     }
 
     fn emit_app_tree_with_lowering(self, target: BuildTarget, target_aware: bool) -> (PathBuf, roundhouse::App, Vec<Diagnostic>) {
+        let t0 = std::time::Instant::now();
         let (scratch, source) = self.materialize();
+        let t1 = std::time::Instant::now();
         // As the CLI does: an error ingest reports gates the emit too.
         let (app, ingest_diags) = roundhouse::ingest::prism::scope(|| ingest_app(&source));
+        let t2 = std::time::Instant::now();
         let mut app = app.expect("ingest the overlaid fixture");
         let lower_diags = if target_aware {
             roundhouse::session::analyze_and_lower_for(&mut app, target)
         } else {
             roundhouse::session::analyze_and_lower(&mut app)
         };
+        let t3 = std::time::Instant::now();
         let mut found: Vec<_> = ingest_diags.into_iter().chain(diagnose(&app)).chain(lower_diags).collect();
+        let t4 = std::time::Instant::now();
         // As the CLI does: a gem's code the app does not reach is no error of the emitted program.
         roundhouse::source_gem_shake::demote_unreached_gem_errors(&app, &mut found);
         let mut errors: Vec<_> = found.into_iter().filter(|d| d.severity == Severity::Error).collect();
@@ -531,11 +538,24 @@ impl Overlay {
             }
             Err(message) => panic!("target files: {message:?}"),
         };
+        let t5 = std::time::Instant::now();
         roundhouse::project::write_to_dir(&files, &emitted).expect("write ruby target tree");
+        phase_log(&format!("emit {:?} materialize={:.3} ingest={:.3} analyze_lower={:.3} diagnose={:.3} target_files={:.3} write={:.3} files={}",
+            target, (t1-t0).as_secs_f64(), (t2-t1).as_secs_f64(), (t3-t2).as_secs_f64(), (t4-t3).as_secs_f64(), (t5-t4).as_secs_f64(), t5.elapsed().as_secs_f64(), files.len()));
         // The verbatim copy of binary assets the CLI writes after the tree.
         roundhouse::project::write_binary_assets(&app.binary_assets, &files, &emitted)
             .expect("write binary assets");
         (emitted, app, errors)
+    }
+}
+
+fn phase_log(line: &str) {
+    if let Some(path) = std::env::var_os("RH_PHASE_LOG") {
+        use std::io::Write;
+        let test = std::thread::current().name().unwrap_or("?").to_string();
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(f, "{test} {line}");
+        }
     }
 }
 
