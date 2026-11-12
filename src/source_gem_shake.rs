@@ -1939,11 +1939,13 @@ pub(crate) fn shakes_source_gems(app: &App, target: crate::build_target::BuildTa
 pub(crate) fn compiled_on_the_ruby_family(app: &App) -> crate::det::HashSet<String> {
     let Some(lock) = app.gem_lock.as_ref() else { return Default::default() };
     let deps = |gem: &str| lock.spec_deps.get(gem).cloned().unwrap_or_default();
+    // Not railties alone: a gem on Rails' view or model stack (simple_form's `require 'action_view'`) would load the
+    // real framework beside the runtime's own `ActionView`/`ActiveModel`, which the emitted tree is instead.
     let needs_railties = |gem: &str| {
         let mut seen: crate::det::HashSet<String> = Default::default();
         let mut stack = vec![gem.to_string()];
         while let Some(g) = stack.pop() {
-            if g == "railties" {
+            if matches!(g.as_str(), "railties" | "actionpack" | "actionview" | "activemodel" | "activerecord" | "actionmailer" | "activejob" | "actiontext" | "activestorage") {
                 return true;
             }
             if seen.insert(g.clone()) {
