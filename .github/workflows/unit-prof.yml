@@ -17,6 +17,8 @@ jobs:
           CARGO_PROFILE_RELEASE_DEBUG: "line-tables-only"
           CARGO_PROFILE_RELEASE_LTO: "false"
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: "true"
+          CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS: "true"
           RUSTFLAGS: "-C force-frame-pointers=yes"
         run: cargo build --release --bin roundhouse
       - name: Profile
@@ -32,6 +34,7 @@ jobs:
           perf record -F 499 -g -o perf.data -- sh -c 'for i in 1 2 3; do target/release/roundhouse --target ruby prof-fixtures/real-blog -o out-ruby-$i > /dev/null 2>&1; done'
           perf report -i perf.data --no-children --stdio --percent-limit 0.7 -g none > logs/self.txt 2>/dev/null
           perf report -i perf.data --children --stdio --percent-limit 2 -g none > logs/children.txt 2>/dev/null
+          perf report -i perf.data --no-children --stdio --percent-limit 3 -g caller,0.5,callee --max-stack 12 > logs/callers.txt 2>/dev/null || true
           head -80 logs/self.txt; head -120 logs/children.txt
       - uses: actions/upload-artifact@v6
         if: always()
