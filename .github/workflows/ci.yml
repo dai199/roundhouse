@@ -618,6 +618,7 @@ jobs:
           # This job installs every prerequisite its tests probe for, so a skip here is a
           # failure: a gem or tool the job stopped providing, not a checkout without it.
           ROUNDHOUSE_REQUIRE_PREREQUISITES: "1"
+          RH_PHASE_LOG: ${{ runner.temp }}/unit-resources/phases.log
         run: |
           mkdir -p "$(dirname "$ROUNDHOUSE_SKIP_LOG")"
           python3 scripts/ci-resources.py --out "$RUNNER_TEMP/unit-resources/tests" -- \
