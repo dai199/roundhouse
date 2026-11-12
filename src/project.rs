@@ -3555,14 +3555,6 @@ fn target_files_inner(
         }
         None => app,
     };
-    let with_module_queries;
-    let app = match crate::lower::module_protocol::lower_for_target(app, target) {
-        Some(lowered) => {
-            with_module_queries = lowered;
-            &with_module_queries
-        }
-        None => app,
-    };
     let with_closed_constantize;
     let app = match crate::lower::constantize::lower_for_target(app, target) {
         Some(lowered) => {
