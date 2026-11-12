@@ -82,10 +82,13 @@ run_suite() {
 }
 # Not run for real: a test that compiles outside run_spinel fails at once here instead of building in its own process.
 collect_suite() {
-  local suite=$1
+  local suite=$1 left
+  # Not up to the deadline: recording takes seconds, and a suite that does not stop must leave the budget to the runs.
+  left=$(( budget / 20 < 30 ? budget / 20 : 30 ))
+  [ "$left" -gt 0 ] || return 0
   mkdir -p "$tmp/collect/$suite"
   RH_SPINEL_BUNDLE_COLLECT="$tmp/collect/$suite" PATH="$tmp/nospinel:$PATH" \
-    timeout -k 5 60 "$(exe "$suite")" --ignored $(filter "$suite") > /dev/null 2>&1 || true
+    timeout -k 5 "$left" "$(exe "$suite")" --ignored $(filter "$suite") > /dev/null 2>&1 || true
 }
 export -f exe filter report_suite run_suite collect_suite
 export tmp budget deadline
@@ -125,7 +128,7 @@ done
 echo "collected $(ls "$tmp/collect-all" | wc -l) cases from ${#later[@]} suites in $(( $(date +%s) - start ))s"
 export RH_SPINEL_BUNDLE="$tmp/bundles"
 # Not after the shared builds: a suite with no case to share compiles alone, so it runs while they build.
-printf '%s\n' "${now[@]}" | grep . | xargs -r -P "$(nproc)" -I{} bash -c 'run_suite {}' &
+printf '%s\n' "${now[@]}" | { grep . || true; } | xargs -r -P "$(nproc)" -I{} bash -c 'run_suite {}' &
 alone=$!
 if [ "${#later[@]}" -gt 0 ]; then
   RH_SPINEL_BUNDLE_COLLECT="$tmp/collect-all" RH_SPINEL_BUNDLE_OUT="$RH_SPINEL_BUNDLE" \
@@ -145,7 +148,7 @@ for suite in sys.argv[2:]:
     (tmp / "charged" / suite).write_text(str(sum(seconds.get(t, 0) for t in tests)))
 PY
 fi
-printf '%s\n' "${later[@]}" | grep . | xargs -r -P "$(nproc)" -I{} bash -c 'run_suite {}' || status=1
+printf '%s\n' "${later[@]}" | { grep . || true; } | xargs -r -P "$(nproc)" -I{} bash -c 'run_suite {}' || status=1
 wait "$alone" || status=1
 for suite in "${serial[@]}"; do run_suite "$suite" || status=1; done
 echo "finished in $(( $(date +%s) - start ))s"
