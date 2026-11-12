@@ -21,7 +21,15 @@ deadline=$(( $(date +%s) + budget ))
 opt=${CI_SPINEL_OPT-0}
 if [ -n "$opt" ] && real=$(command -v spinel); then
   mkdir -p "$tmp/shim"
-  printf '#!/bin/sh\nexec "%s" -O%s "$@"\n' "$real" "$opt" > "$tmp/shim/spinel"
+  calls="${CI_SPINEL_TIMINGS_OUT:-$tmp/x}.calls"
+  cat > "$tmp/shim/spinel" <<SH
+#!/usr/bin/env bash
+TIMEFORMAT='%R %U %S'
+s=\$(date +%s)
+{ time "$real" -O$opt "\$@" 2>&3; } 3>&2 2>"$tmp/t.\$\$"; st=\$?
+echo "\${RH_SUITE:-?} \$s \$(cat "$tmp/t.\$\$") \$st \${ROUNDHOUSE_PARAM_BINDS:-~} \$PWD \$*" >> "$calls"; rm -f "$tmp/t.\$\$"
+exit \$st
+SH
   chmod +x "$tmp/shim/spinel"
   export PATH="$tmp/shim:$PATH"
 fi
@@ -61,6 +69,7 @@ run_suite() {
   local suite=$1
   local bin left status=124
   bin=$(exe "$suite")
+  export RH_SUITE=$suite
   left=$(( deadline - $(date +%s) ))
   : > "$tmp/logs/$suite.log"
   if [ "$left" -gt 0 ]; then
