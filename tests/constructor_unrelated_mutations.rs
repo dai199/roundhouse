@@ -512,17 +512,19 @@ class Base
     {writer}
   end
 
+  def self.inherited(child)
+    child.path = child.name.to_s.downcase
+    super
+  end
+end
+
+class Notes
   def self.note(value)
     @noted = value
   end
 
   def self.install(value)
-    define_singleton_method(:new) {{ |**o| o }}
-  end
-
-  def self.inherited(child)
-    child.path = child.name.to_s.downcase
-    super
+    value.define_singleton_method(:new) {{ |**o| o }}
   end
 end
 
