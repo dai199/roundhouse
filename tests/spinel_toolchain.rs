@@ -72,10 +72,6 @@ mod class_param_or_assign_app;
 mod class_param_or_assign;
 #[path = "spinel_toolchain/addressable.rs"]
 mod addressable;
-#[path = "support/view_component_gem.rs"]
-mod view_component_gem;
-#[path = "spinel_toolchain/view_component.rs"]
-mod view_component;
 #[path = "spinel_toolchain/conditional_definitions.rs"]
 mod conditional_definitions;
 #[path = "support/class_attribute.rs"]

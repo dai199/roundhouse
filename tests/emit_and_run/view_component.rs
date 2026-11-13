@@ -30,3 +30,15 @@ fn a_polymorphic_slot_is_reported() {
         .emit(roundhouse::project::BuildTarget::Ruby);
     assert!(errors.iter().any(|e| e.contains("polymorphic slot")), "{errors:#?}");
 }
+
+/// The preview pages of the gem's engine: their controller is Rails' `Rails::ApplicationController`'s, no route
+/// dispatches to it (the engine draws the preview routes only when previews are shown), and the concern that renders
+/// them runs only as its action. The Spinel tree leaves them out, as they call route helpers no route defines.
+#[test]
+fn the_preview_pages_no_route_reaches_are_left_out_of_the_spinel_tree() {
+    let Some(app) = app() else { return };
+    let (emitted, _errors) = app.emit(roundhouse::project::BuildTarget::Spinel);
+    assert!(!emitted.join("app/views/view_components/index.rb").exists());
+    assert!(!emitted.join("app/views/view_components/previews.rb").exists());
+    assert!(emitted.join("app/views/articles/index.rb").exists());
+}
