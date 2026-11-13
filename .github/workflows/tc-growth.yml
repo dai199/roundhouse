@@ -24,6 +24,6 @@ jobs:
           done
           for t in obj_array_walk_method_tail.rb object_array_push_element_read.rb; do
             echo "=== $t base self-diff: $(diff /tmp/$t-${B:0:7}-1.out /tmp/$t-${B:0:7}-2.out | wc -l)"
-            diff /tmp/$t-${B:0:7}-1.out /tmp/$t-reopen-1.out | head -60
-            echo "--- run outputs"; diff /tmp/$t-${B:0:7}.run /tmp/$t-reopen.run && echo same run; cat /tmp/$t-reopen.run | head; echo "--- expected"; diff /tmp/$t-reopen.run <(cat sp/test/$t.expected 2>/dev/null; echo "run exit=0") && echo matches expected
+            diff /tmp/$t-${B:0:7}-1.out /tmp/$t-reopen--1.out | head -60
+            echo "--- run outputs"; diff /tmp/$t-${B:0:7}.run /tmp/$t-reopen-.run && echo same run; cat /tmp/$t-reopen-.run | head; echo "--- expected"; diff /tmp/$t-reopen-.run <(cat sp/test/$t.expected 2>/dev/null; echo "run exit=0") && echo matches expected
           done
