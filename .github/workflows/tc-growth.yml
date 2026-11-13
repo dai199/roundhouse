@@ -5,46 +5,31 @@ on:
 permissions:
   contents: read
 jobs:
-  measure:
+  empty:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-rust
-      - name: Build roundhouse and emit
+      - name: Build roundhouse (main) and emit
         run: |
-          git clone -q https://github.com/roundhouse-rb/roundhouse rh && git -C rh checkout -q 2961d6e559e6f4c783e235b11c980e25846cd325
+          git clone -q https://github.com/roundhouse-rb/roundhouse rh && git -C rh log -1 --oneline
           (cd rh && cargo build --release --bin roundhouse)
           mkdir -p out logs
-          tar -xzf split-fixtures/real-blog.tar.gz -C split-fixtures
-          rh/target/release/roundhouse --target spinel split-fixtures/real-blog -o out/blog 2>&1 | tail -1
-          rh/target/release/roundhouse --target spinel split-fixtures/empty -o out/empty 2>&1 | tail -1
-      - name: Base and branch
+          for a in empty bare; do rh/target/release/roundhouse --target spinel split-fixtures/$a -o out/$a > logs/emit-$a.log 2>&1; tail -2 logs/emit-$a.log; done
+      - name: Spinel master
         run: |
           sudo apt-get update -q && sudo apt-get install -yq libsqlite3-dev libyaml-dev
-          git clone -q https://github.com/matz/spinel sp
-          git -C sp fetch -q https://github.com/dai199/spinel root-method-fast:root-method-fast
-          git -C sp rev-parse root-method-fast~1 > /tmp/base.sha
-          find sp/test -name '*.rb' | sed 's|^sp/||' | sort > /tmp/tests.txt
-          cat > /tmp/one.sh <<'X'
-          f="$1"; o=/tmp/corp/$V/$(echo "$f" | tr / _)
-          cd $GITHUB_WORKSPACE/sp && timeout 120 ./spinel "$f" -S > "$o" 2>&1; echo "exit=$?" >> "$o"
-          X
-          for V in base root-method-fast; do
-            if [ $V = base ]; then git -C sp checkout -q $(cat /tmp/base.sha); else git -C sp checkout -q $V; fi
-            make -C sp deps >/dev/null && make -C sp all -j4 >/dev/null && git -C sp log -1 --oneline
-            for a in blog empty; do for i in 1 2; do
-              ( cd out/$a && $GITHUB_WORKSPACE/sp/spinel main.rb -c -o /tmp/$a-$V.c --force --timing ) > logs/$a-$V-$i.log 2>&1 || echo "$a $V FAILED"
-              echo "$a $V #$i $(grep -o 'phase=analysis ms=[0-9.]*' logs/$a-$V-$i.log) $(grep -o 'phase=analysis_fixpoint ms=[0-9.]* rounds=[0-9]*' logs/$a-$V-$i.log)"
-            done; done
-            mkdir -p /tmp/corp/$V
-            export V; xargs -P4 -n1 bash /tmp/one.sh < /tmp/tests.txt
-          done | tee logs/apps.txt
-          for a in blog empty; do cmp -s /tmp/$a-base.c /tmp/$a-root-method-fast.c && echo "$a C identical" || echo "$a C DIFFERS"; done | tee -a logs/apps.txt
-          echo "corpus: $(wc -l < /tmp/tests.txt) files, $(diff -rq /tmp/corp/base /tmp/corp/root-method-fast | wc -l) differ" | tee -a logs/apps.txt
-          diff -rq /tmp/corp/base /tmp/corp/root-method-fast | head -50 > logs/corpus-diff.txt || true
+          git clone -q https://github.com/matz/spinel sp && git -C sp log -1 --oneline
+          make -C sp deps >/dev/null && make -C sp all -j4 >/dev/null
+          for a in empty bare; do
+            ( cd out/$a && $GITHUB_WORKSPACE/sp/spinel main.rb -c -o /tmp/$a.c --force ) > logs/spinel-$a.log 2>&1; echo "$a exit=$?"; grep -v '^spinel-timing' logs/spinel-$a.log | tail -5
+            l=$(grep -o 'main.rb:[0-9]*' logs/spinel-$a.log | head -1 | cut -d: -f2)
+            [ -n "$l" ] && sed -n "$((l-15)),$((l+5))p" out/$a/main.rb
+          done
+          tar -czf logs/out.tgz out
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: tc-growth-fix
+          name: tc-growth-empty
           path: logs
