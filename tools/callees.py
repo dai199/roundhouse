@@ -9,9 +9,9 @@ def flush(block):
     global total
     if not block: return
     frames = []
-    for l in block[1:]:
+    for l in block:
         p = l.strip().split()
-        if len(p) >= 2:
+        if len(p) >= 2 and all(ch in '0123456789abcdef' for ch in p[0]):
             frames.append(p[1].split('+')[0])
     total += 1
     seen = set()
