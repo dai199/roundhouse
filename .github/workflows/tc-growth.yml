@@ -1,0 +1,46 @@
+name: tc-growth
+on:
+  push:
+    branches: [tc-growth]
+permissions:
+  contents: read
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        rh: [b56de3091b8aba5293a89a656d07354cb5720e36, 2961d6e559e6f4c783e235b11c980e25846cd325]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-rust
+      - name: Build roundhouse at ${{ matrix.rh }}
+        run: |
+          git clone -q https://github.com/roundhouse-rb/roundhouse rh && git -C rh checkout -q ${{ matrix.rh }}
+          (cd rh && cargo build --release --bin roundhouse)
+      - name: Emit
+        run: |
+          tar -xzf split-fixtures/real-blog.tar.gz -C split-fixtures
+          mkdir -p out logs
+          rh/target/release/roundhouse --target spinel split-fixtures/real-blog -o out/blog 2>&1 | tail -1
+          rh/target/release/roundhouse --target spinel split-fixtures/empty -o out/empty 2>&1 | tail -1
+          find out/blog -name '*.rb' | xargs cat | wc -l
+      - name: Each Spinel
+        run: |
+          sudo apt-get update -q && sudo apt-get install -yq libsqlite3-dev libyaml-dev
+          git clone -q https://github.com/matz/spinel sp
+          for V in d7786278 63742e2b; do
+            git -C sp checkout -q $V && make -C sp deps >/dev/null && make -C sp all -j4 >/dev/null && git -C sp log -1 --oneline
+            for a in blog empty; do for i in 1 2; do
+              s=$(date +%s.%N)
+              ( cd out/$a && CFLAGS=-O0 $GITHUB_WORKSPACE/sp/spinel main.rb -o /tmp/$a-$V --force --timing ) > logs/$a-$V-$i.log 2>&1 || echo "$a $V FAILED"
+              e=$(date +%s.%N)
+              echo "rh=${{ matrix.rh }} sp=$V $a #$i wall=$(echo "$e - $s" | bc) $(grep -o 'phase=analysis ms=[0-9.]*' logs/$a-$V-$i.log) $(grep -o 'phase=analysis_fixpoint ms=[0-9.]* rounds=[0-9]*' logs/$a-$V-$i.log) $(grep -o 'phase=codegen_program ms=[0-9.]*' logs/$a-$V-$i.log)"
+            done; done
+          done | tee logs/apps.txt
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: tc-growth-${{ strategy.job-index }}
+          path: logs
