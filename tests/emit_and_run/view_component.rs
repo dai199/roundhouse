@@ -17,3 +17,16 @@ fn a_component_renders_its_template_on_ruby() {
     assert!(run.stdout.contains("view_component passed"), "{}", run.stdout);
 }
 
+
+/// A polymorphic slot `define_method`s setters named as it runs, which no tree carries: reported, not left to raise.
+#[test]
+fn a_polymorphic_slot_is_reported() {
+    let Some(app) = app() else { return };
+    let (_, errors) = app
+        .write(
+            "app/components/badge_component.rb",
+            "class BadgeComponent < ViewComponent::Base\n  renders_one :icon, types: { svg: \"SvgIcon\" }\nend\n",
+        )
+        .emit(roundhouse::project::BuildTarget::Ruby);
+    assert!(errors.iter().any(|e| e.contains("badge_component") && e.contains("polymorphic slot")), "{errors:#?}");
+}
