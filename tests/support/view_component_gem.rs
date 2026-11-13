@@ -93,13 +93,11 @@ pub fn app() -> Option<emit_and_run::Overlay> {
 /// page of the engine) and test helpers, the engine's Railtie and `Rails::Engine`, the runtime template compiler this
 /// tree replaces (`ActionView::Template`, its `class_eval`s), translations (`I18n` internals, keyword splats through
 /// `super`), collections (`ActionView::PartialIteration`), and method_source's computed requires.
-pub const KNOWN_GAPS: [&str; 21] = [
+pub const KNOWN_GAPS: [&str; 19] = [
     "@render_args has no known type",
     "@example_name has no known type",
     "@preview has no known type",
-    "@previews has no known type",
     "@view_renderer has no known type",
-    "render with a block not supported (all targets)",
     "render of an object not supported (all targets)",
     "conditional or dynamic visibility declarations are not modeled",
     "railtie middleware not supported (all targets)",
