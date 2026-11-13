@@ -97,14 +97,24 @@ pub fn apply_method_missing_calls(app: &mut App, registry: &HashMap<ClassId, cra
     // The instance methods each class's subclasses define: a receiverless call in the class reaches one of them on a
     // subclass's instance (view_component's `render_template_for` calls the `call` each component defines), which
     // Ruby dispatches before `method_missing`.
+    // Not the parent as written: `class UI::Card < Base` names `UI::Base` when one is declared, as `core_of` resolves it.
+    let qualified_parent = |name: &str| -> Option<String> {
+        let parent = parents.get(name)?.clone()?;
+        let scope: Vec<&str> = name.split("::").collect();
+        (1..scope.len())
+            .rev()
+            .map(|depth| format!("{}::{parent}", scope[..depth].join("::")))
+            .find(|candidate| candidate != name && parents.contains_key(candidate))
+            .or(Some(parent))
+    };
     let mut below: HashMap<String, crate::det::HashSet<String>> = HashMap::default();
     for lc in app.library_classes.iter().filter(|c| !c.is_module) {
         let names: Vec<String> = lc.methods.iter().filter(|m| m.receiver == crate::dialect::MethodReceiver::Instance).map(|m| m.name.as_str().to_string()).collect();
-        let mut current = parents.get(lc.name.0.as_str()).cloned().flatten();
+        let mut current = qualified_parent(lc.name.0.as_str());
         for _ in 0..32 {
             let Some(name) = current else { break };
             below.entry(name.clone()).or_default().extend(names.iter().cloned());
-            current = parents.get(&name).cloned().flatten();
+            current = qualified_parent(&name);
         }
     }
     for lc in &mut app.library_classes {

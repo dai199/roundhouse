@@ -1334,7 +1334,7 @@ fn compile_components<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V) {
             }
         }
     }
-    let files: Vec<(String, Vec<crate::ident::ClassId>)> = app.library_class_files.iter().filter(|(path, _)| path.contains("/app/components/")).cloned().collect();
+    let files: Vec<(String, Vec<crate::ident::ClassId>)> = app.library_class_files.iter().filter(|(path, _)| path.starts_with("app/components/") || path.contains("/app/components/")).cloned().collect();
     for (path, names) in files {
         let Some(file_stem) = path.strip_suffix(".rb") else { continue };
         let file_leaf = file_stem.rsplit_once('/').map_or(file_stem, |(_, n)| n);
@@ -1570,7 +1570,8 @@ fn renders_as_component(app: &App, class: &crate::ident::ClassId) -> bool {
         if depth > 32 {
             return false;
         }
-        current = app.library_classes.iter().find(|c| c.name == name).and_then(|c| c.parent.clone());
+        // Not the first declaration's: a reopening that names no superclass may come before the one that does.
+        current = app.library_classes.iter().filter(|c| c.name == name).find_map(|c| c.parent.clone());
     }
     false
 }

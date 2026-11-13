@@ -1415,9 +1415,6 @@ impl Run<'_> {
             } {
                 Some(true) => self.exec(then_branch, env, depth),
                 Some(false) => self.exec(else_branch, env, depth),
-                // Not stopped at a guard that only raises (view_component's `raise RedefinedSlotError … if
-                // registered_slots.key?(slot_name)`): the app the macro expands for runs in Rails, so it did not.
-                None if (raises_only(then_branch) && is_nil(else_branch)) || (raises_only(else_branch) && is_nil(then_branch)) => Ok(false),
                 None => Err("a condition depends on a value known only when it runs".into()),
             },
             ExprNode::Lit { value: Literal::Nil } => Ok(false),
@@ -2784,19 +2781,3 @@ fn defines_methods(e: &Expr) -> bool {
     found
 }
 
-/// A branch that is only `raise …` / `fail …`.
-fn raises_only(e: &Expr) -> bool {
-    match &*e.node {
-        ExprNode::Seq { exprs } => matches!(exprs.as_slice(), [only] if raises_only(only)),
-        ExprNode::Send { recv: None, method, .. } => matches!(method.as_str(), "raise" | "fail"),
-        _ => false,
-    }
-}
-
-fn is_nil(e: &Expr) -> bool {
-    match &*e.node {
-        ExprNode::Lit { value: Literal::Nil } => true,
-        ExprNode::Seq { exprs } => exprs.is_empty(),
-        _ => false,
-    }
-}

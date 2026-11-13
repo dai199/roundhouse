@@ -316,8 +316,8 @@ pub(super) fn folds_true(cond: &Expr) -> bool {
             ExprNode::Send { recv: Some(r), method, args, block: None, .. } if method.as_str() == "to_f" && args.is_empty() => match &*r.node {
                 ExprNode::Lit { value: Literal::Str { value } } => {
                     let digits: String = value.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
-                    // Not a mantissa an exponent follows (`"1.2e-2".to_f`), which Ruby reads whole.
-                    if value[digits.len()..].starts_with(['e', 'E']) {
+                    // Not a mantissa an exponent or a digit separator follows (`"1.2e-2".to_f`, `"1_0".to_f`), which Ruby reads whole.
+                    if value[digits.len()..].starts_with(['e', 'E', '_']) {
                         return None;
                     }
                     let digits = match digits.match_indices('.').nth(1) {
@@ -693,9 +693,57 @@ struct Boot<'a> {
     config_opaque: bool,
 }
 
+struct GuardedNext<'pr> {
+    predicate: Node<'pr>,
+    unless: bool,
+}
+
+/// `next if cond` / `next unless cond`, with nothing else in the branch.
+fn guarded_next<'pr>(node: &Node<'pr>) -> Option<GuardedNext<'pr>> {
+    let only_next = |stmts: Option<ruby_prism::StatementsNode<'pr>>| {
+        stmts.is_some_and(|s| {
+            let body: Vec<_> = s.body().iter().collect();
+            matches!(body.as_slice(), [n] if n.as_next_node().is_some_and(|n| n.arguments().is_none()))
+        })
+    };
+    if let Some(n) = node.as_if_node() {
+        return (n.subsequent().is_none() && only_next(n.statements())).then(|| GuardedNext { predicate: n.predicate(), unless: false });
+    }
+    let n = node.as_unless_node()?;
+    (n.else_clause().is_none() && only_next(n.statements())).then(|| GuardedNext { predicate: n.predicate(), unless: true })
+}
+
 impl Boot<'_> {
+    // Not every statement after a `next`: the replay leaves the block there, so what follows writes nothing, or only
+    // on the path where `next if cond`'s condition is false.
     fn statements(&mut self, nodes: &[Node<'_>]) {
-        for node in nodes {
+        for (at, node) in nodes.iter().enumerate() {
+            if node.as_next_node().is_some_and(|n| n.arguments().is_none()) {
+                return;
+            }
+            if let Some(exit) = guarded_next(node) {
+                match self.value(&exit.predicate).truthy().map(|truthy| truthy != exit.unless) {
+                    Some(true) => return,
+                    Some(false) => continue,
+                    None => {
+                        let before = (self.modules.clone(), self.config.clone());
+                        self.statements(&nodes[at + 1..]);
+                        let module_keys: Vec<(String, String)> = self.modules.keys().cloned().collect();
+                        for k in module_keys {
+                            if self.modules.get(&k) != before.0.get(&k) {
+                                self.modules.insert(k, Val::Unknown);
+                            }
+                        }
+                        let config_keys: Vec<Vec<String>> = self.config.keys().cloned().collect();
+                        for k in config_keys {
+                            if self.config.get(&k) != before.1.get(&k) {
+                                self.config.insert(k, Val::Unknown);
+                            }
+                        }
+                        return;
+                    }
+                }
+            }
             self.statement(node);
         }
     }

@@ -1134,8 +1134,9 @@ fn lookup_changing_methods(
 /// dynamic send with any other name may run one, so it counts.
 fn sends_app_method(method: &Symbol, args: &[Expr], app_methods: &HashSet<Symbol>) -> bool {
     if matches!(method.as_str(), "send" | "public_send" | "__send__") {
-        return match args.first().map(literal_method_name) {
-            Some(Some(name)) => app_methods.contains(&Symbol::from(name)),
+        // Not the literal name alone: `public_send(:send, :install, …)` runs what the inner send names.
+        return match args.split_first().map(|(first, rest)| (literal_method_name(first), rest)) {
+            Some((Some(name), rest)) => sends_app_method(&Symbol::from(name), rest, app_methods),
             _ => true,
         };
     }

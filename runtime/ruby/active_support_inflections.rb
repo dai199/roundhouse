@@ -160,8 +160,19 @@ module ActiveSupport
       ::Inflector.pluralize_word(word.to_s, 2)
     end
 
+    # Not the regular-suffix `ActiveSupport.singularize` alone: Rails' uncountables and irregulars come first.
     def self.singularize(word)
-      ActiveSupport.singularize(word.to_s)
+      s = word.to_s
+      d = s.downcase
+      return s if ::Inflector.pluralize_uncountable?(d) || d.end_with?("news")
+      return ::Inflector.pluralize_cased(s, 6, "erson") if d.end_with?("people") || d.end_with?("person")
+      return ::Inflector.pluralize_cased(s, 8, "hild") if d.end_with?("children")
+      return ::Inflector.pluralize_cased(s, 5, "hild") if d.end_with?("child")
+      return ::Inflector.pluralize_cased(s, 3, "an") if d.end_with?("men") || d.end_with?("man")
+      return ::Inflector.pluralize_cased(s, 5, "ex") if d.end_with?("sexes")
+      return ::Inflector.pluralize_cased(s, 5, "ove") if d.end_with?("moves")
+      return ::Inflector.pluralize_cased(s, 7, "ombie") if d.end_with?("zombies")
+      ActiveSupport.singularize(s)
     end
 
     # Rails' camelize with the default (upper camel case) and lower-camel
