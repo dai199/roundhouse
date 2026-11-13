@@ -11,7 +11,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rh: [b56de3091b8aba5293a89a656d07354cb5720e36, 2961d6e559e6f4c783e235b11c980e25846cd325]
+        rh: [2961d6e559e6f4c783e235b11c980e25846cd325]
+        half: [a, b]
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-rust
@@ -30,11 +31,12 @@ jobs:
         run: |
           sudo apt-get update -q && sudo apt-get install -yq libsqlite3-dev libyaml-dev
           git clone -q https://github.com/matz/spinel sp
-          for V in d7786278 63742e2b; do
+          if [ ${{ matrix.half }} = a ]; then PTS='d7786278 7884424a7 f4236410b e12d53276 b7c584c18 17dc13569 7e58b7fb8 63742e2bf'; else PTS='d7786278 e60c7ec35 72208b6da e2bbc620c 50408d915 f0505284c 3afb6114f 63742e2bf'; fi
+          for V in $PTS; do
             git -C sp checkout -q $V && make -C sp deps >/dev/null && make -C sp all -j4 >/dev/null && git -C sp log -1 --oneline
-            for a in blog empty; do for i in 1 2; do
+            for a in empty; do for i in 1; do
               s=$(date +%s.%N)
-              ( cd out/$a && CFLAGS=-O0 $GITHUB_WORKSPACE/sp/spinel main.rb -o /tmp/$a-$V --force --timing ) > logs/$a-$V-$i.log 2>&1 || echo "$a $V FAILED"
+              ( cd out/$a && CFLAGS=-O0 $GITHUB_WORKSPACE/sp/spinel main.rb -c -o /tmp/$a-$V.c --force --timing ) > logs/$a-$V-$i.log 2>&1 || echo "$a $V FAILED"
               e=$(date +%s.%N)
               echo "rh=${{ matrix.rh }} sp=$V $a #$i wall=$(echo "$e - $s" | bc) $(grep -o 'phase=analysis ms=[0-9.]*' logs/$a-$V-$i.log) $(grep -o 'phase=analysis_fixpoint ms=[0-9.]* rounds=[0-9]*' logs/$a-$V-$i.log) $(grep -o 'phase=codegen_program ms=[0-9.]*' logs/$a-$V-$i.log)"
             done; done
