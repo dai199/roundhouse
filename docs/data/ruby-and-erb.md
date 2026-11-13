@@ -107,7 +107,8 @@ class's file and is an error). Every branch's methods are ordinary methods of th
 class, so analysis types each one; `LibraryClass::conditional_definitions`
 records which branch defines which. The Ruby, JRuby and Spinel trees write the
 conditional around them where the source had it, so the branch Ruby
-selects at load defines them (Spinel compiles the `if` as Ruby loads it). Other targets would define every branch's
+selects at load defines them (Spinel compiles the `if` as Ruby loads it, and refuses a
+name a builtin, an accessor or another `def` also answers, which is reported). Other targets would define every branch's
 methods, and report each such statement as an error
 (`conditional_definition`). A named visibility change (`private :mode`)
 applies to such a method only when every branch defines it and the

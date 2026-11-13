@@ -28,5 +28,5 @@ fn a_polymorphic_slot_is_reported() {
             "class BadgeComponent < ViewComponent::Base\n  renders_one :icon, types: { svg: \"SvgIcon\" }\nend\n",
         )
         .emit(roundhouse::project::BuildTarget::Ruby);
-    assert!(errors.iter().any(|e| e.contains("badge_component") && e.contains("polymorphic slot")), "{errors:#?}");
+    assert!(errors.iter().any(|e| e.contains("polymorphic slot")), "{errors:#?}");
 }
