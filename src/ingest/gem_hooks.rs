@@ -1302,7 +1302,7 @@ pub(super) fn view_component_templates<V: crate::vfs::Vfs + ?Sized>(app: &mut Ap
     if !app.library_classes.iter().any(|c| c.name.0.as_str() == "ViewComponent::Base") {
         return;
     }
-    let hook = "module ViewComponent\n  class Compiler\n    def compile(raise_errors: false, force: false)\n      return if compiled? && !force\n      return if @component == ViewComponent::Base\n      @component.validate_initialization_parameters! if raise_errors\n      @component.register_default_slots\n      @component.build_i18n_backend\n      CompileCache.register(@component)\n    end\n  end\n\n  class Base\n    def render_template_for(variant = nil, format = nil)\n      call\n    end\n\n    def self.inherited(child)\n      compile\n      if defined?(Rails) && Rails.application && !(child < Rails.application.routes.url_helpers)\n        child.include Rails.application.routes.url_helpers\n      end\n      child.identifier = caller_locations(1, 10).reject { |l| l.base_label == \"inherited\" }[0].path\n      if defined?(Rails) && Rails.application\n        child.virtual_path = child.identifier.gsub(/(.*#{Regexp.quote(ViewComponent::Base.config.view_component_path)})|(\\.rb)/, \"\")\n      end\n      child.with_collection_parameter provided_collection_parameter\n      super\n    end\n\n    def self.renders_one(slot_name, callable = nil)\n      validate_singular_slot_name(slot_name)\n      validate_plural_slot_name(ActiveSupport::Inflector.pluralize(slot_name).to_sym)\n      register_slot(slot_name, collection: false, callable: callable)\n    end\n\n    def self.renders_many(slot_name, callable = nil)\n      validate_plural_slot_name(slot_name)\n      validate_singular_slot_name(ActiveSupport::Inflector.singularize(slot_name).to_sym)\n      register_slot(slot_name, collection: true, callable: callable)\n    end\n  end\nend\n";
+    let hook = "module ViewComponent\n  class Compiler\n    def compile(raise_errors: false, force: false)\n      return if compiled? && !force\n      return if @component == ViewComponent::Base\n      @component.validate_initialization_parameters! if raise_errors\n      @component.register_default_slots\n      @component.build_i18n_backend\n      CompileCache.register(@component)\n    end\n  end\n\n  class Base\n    def render_template_for(variant = nil, format = nil)\n      call\n    end\n\n    def self.inherited(child)\n      compile\n      if defined?(Rails) && Rails.application && !(child < Rails.application.routes.url_helpers)\n        child.include Rails.application.routes.url_helpers\n      end\n      child.identifier = caller_locations(1, 10).reject { |l| l.base_label == \"inherited\" }[0].path\n      if defined?(Rails) && Rails.application\n        child.virtual_path = child.identifier.gsub(/(.*#{Regexp.quote(ViewComponent::Base.config.view_component_path)})|(\\.rb)/, \"\")\n      end\n      child.with_collection_parameter provided_collection_parameter\n      super\n    end\n\n    def self.renders_one(slot_name, callable = nil)\n      validate_singular_slot_name(slot_name)\n      validate_plural_slot_name(ActiveSupport::Inflector.pluralize(slot_name).to_sym)\n      register_slot(slot_name, collection: false, callable: callable)\n    end\n\n    def self.renders_many(slot_name, callable = nil)\n      validate_plural_slot_name(slot_name)\n      validate_singular_slot_name(ActiveSupport::Inflector.singularize(slot_name).to_sym)\n      register_slot(slot_name, collection: true, callable: callable)\n    end\n\n    def self.define_slot(slot_name, collection:, callable:)\n      slot = {collection: collection}\n      return slot unless callable\n      if callable.respond_to?(:method_defined?) && callable.method_defined?(:render_in)\n        slot[:renderable] = callable\n      elsif callable.is_a?(String)\n        slot[:renderable_class_name] = callable\n      elsif callable.respond_to?(:call)\n        slot[:renderable_function] = instance_method(:\"_call_#{slot_name}\")\n      else\n        raise(InvalidSlotDefinitionError)\n      end\n      slot\n    end\n  end\nend\n";
     if let Ok(replacements) = super::library_class::ingest_library_classes(hook.as_bytes(), VIEW_COMPONENT_HOOK) {
         for replacement in replacements {
             // Every part of the class drops the gem's own definition (a reopening holds one too), and the first takes
@@ -1369,14 +1369,15 @@ fn synthetic_constants(e: &mut Expr) {
 }
 
 /// A component's `renders_one :name[, callable]` / `renders_many :names[, callable]`: the macro `define_method`s its
-/// slot's methods with `*args, &block` (and a callable lambda's as `_call_<name>`), which the class-macro expansion
+/// slot's methods with `*args, &block` under `ruby2_keywords` (written here with `**kwargs`, which reach `set_slot`'s
+/// own `ruby2_keywords` the same way), and a callable lambda's as `_call_<name>`, which the class-macro expansion
 /// cannot carry. The slot's methods are written here as the gem defines them, for the analysis and every target, and
 /// the call itself runs in the class body as Ruby loads it, which registers the slot as the gem does.
 fn view_component_slots<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V, path: &str, class: &crate::ident::ClassId) {
     let Ok(text) = vfs.read_to_string(std::path::Path::new(path)) else { return };
     let parsed = ruby_prism::parse(text.as_bytes());
-    let mut calls: Vec<(String, bool, Expr)> = Vec::new();
-    fn find<'pr>(node: &ruby_prism::Node<'pr>, class: &str, scope: &mut Vec<String>, file: &str, out: &mut Vec<(String, bool, Expr)>) {
+    let mut calls: Vec<(String, bool, Expr, Option<String>)> = Vec::new();
+    fn find<'pr>(node: &ruby_prism::Node<'pr>, class: &str, scope: &mut Vec<String>, file: &str, out: &mut Vec<(String, bool, Expr, Option<String>)>) {
         let (path, body) = if let Some(c) = node.as_class_node() {
             (String::from_utf8_lossy(c.constant_path().location().as_slice()).into_owned(), c.body())
         } else if let Some(m) = node.as_module_node() {
@@ -1403,9 +1404,37 @@ fn view_component_slots<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V, pat
                 && matches!(macro_name.as_ref() as &str, "renders_one" | "renders_many")
                 && let Some(first) = call.arguments().and_then(|a| a.arguments().iter().next())
                 && let Some(name) = first.as_symbol_node()
-                && let Ok(expr) = super::expr::ingest_expr(&child, file)
             {
-                out.push((String::from_utf8_lossy(name.unescaped()).into_owned(), macro_name.as_ref() as &str == "renders_many", expr));
+                // A lambda callable (`->(title:, &block) { … }`) as the method the gem defines from it, `_call_<name>`;
+                // the call replayed hands the slot an empty lambda in its place, which `define_slot` only asks to be
+                // callable.
+                let name = String::from_utf8_lossy(name.unescaped()).into_owned();
+                let lambda = call.arguments().and_then(|a| a.arguments().iter().nth(1)).and_then(|arg| {
+                    let lambda = arg.as_lambda_node()?;
+                    let params = lambda
+                        .parameters()
+                        .map(|p| String::from_utf8_lossy(p.location().as_slice()).into_owned())
+                        .unwrap_or_default();
+                    let params = params.trim().trim_start_matches(['(', '|']).trim_end_matches([')', '|']).to_string();
+                    let body = lambda.body().map(|b| String::from_utf8_lossy(b.location().as_slice()).into_owned()).unwrap_or_default();
+                    Some(format!("  def _call_{name}({params})\n    {body}\n  end\n\n"))
+                });
+                let replayed = if lambda.is_some() {
+                    let text = format!("{} :{name}, -> {{}}\n", macro_name.as_ref() as &str);
+                    let parsed = ruby_prism::parse(text.as_bytes());
+                    let stmt = parsed.node().as_program_node().and_then(|p| p.statements().body().iter().next());
+                    stmt.and_then(|stmt| super::expr::ingest_expr(&stmt, file).ok()).map(|mut e| {
+                        use crate::ingest::prism_api::PrismLocation;
+                        let at = child.location();
+                        e.span = crate::span::Span { file: super::sources::file_id(file), start: at.start_offset() as u32, end: at.end_offset() as u32 };
+                        e
+                    })
+                } else {
+                    super::expr::ingest_expr(&child, file).ok()
+                };
+                if let Some(expr) = replayed {
+                    out.push((name, macro_name.as_ref() as &str == "renders_many", expr, lambda));
+                }
             } else {
                 find(&child, class, scope, file, out);
             }
@@ -1417,31 +1446,49 @@ fn view_component_slots<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V, pat
         return;
     }
     let mut source = format!("class {}\n", class.0.as_str());
-    for (name, many, _) in &calls {
+    for (name, many, _, lambda) in &calls {
+        if let Some(method) = lambda {
+            source.push_str(method);
+        }
         if *many {
             let one = crate::naming::singularize(name);
             source.push_str(&format!(
-                "  def with_{one}(*args, &block)\n    set_slot(:{name}, nil, *args, &block)\n  end\n\n  def with_{one}_content(content)\n    with_{one} {{ content.to_s }}\n    self\n  end\n\n  def with_{name}(collection_args = nil, &block)\n    collection_args.map do |args|\n      if args.respond_to?(:to_hash)\n        set_slot(:{name}, nil, **args, &block)\n      else\n        set_slot(:{name}, nil, *args, &block)\n      end\n    end\n  end\n\n"
+                "  def with_{one}(*args, **kwargs, &block)\n    set_slot(:{name}, nil, *args, **kwargs, &block)\n  end\n\n  def with_{one}_content(content)\n    with_{one} {{ content.to_s }}\n    self\n  end\n\n  def with_{name}(collection_args = nil, &block)\n    collection_args.map do |args|\n      if args.respond_to?(:to_hash)\n        set_slot(:{name}, nil, **args, &block)\n      else\n        set_slot(:{name}, nil, *args, &block)\n      end\n    end\n  end\n\n"
             ));
         } else {
             source.push_str(&format!(
-                "  def with_{name}(*args, &block)\n    set_slot(:{name}, nil, *args, &block)\n  end\n\n  def with_{name}_content(content)\n    with_{name} {{ content.to_s }}\n    self\n  end\n\n"
+                "  def with_{name}(*args, **kwargs, &block)\n    set_slot(:{name}, nil, *args, **kwargs, &block)\n  end\n\n  def with_{name}_content(content)\n    with_{name} {{ content.to_s }}\n    self\n  end\n\n"
             ));
         }
         source.push_str(&format!("  def {name}\n    get_slot(:{name})\n  end\n\n  def {name}?\n    get_slot(:{name}).present?\n  end\n\n"));
     }
     source.push_str("end\n");
     let file = format!("(roundhouse)/view_component_slots/{}.rb", crate::naming::underscore(class.0.as_str()));
-    let Ok(classes) = super::library_class::ingest_library_classes(source.as_bytes(), &file) else { return };
+    let classes = match super::library_class::ingest_library_classes(source.as_bytes(), &file) {
+        Ok(classes) => classes,
+        Err(_) => return,
+    };
     let Some(lc) = app.library_classes.iter_mut().find(|c| &c.name == class) else { return };
+    // Placed just ahead of the first `renders_*` call: the call, replayed where it stands, registers a lambda slot
+    // through its `_call_<name>`, which has to exist by then, as the gem's `define_method` made it.
+    let first = calls.iter().map(|(_, _, call, _)| call.span).min_by_key(|span| span.start);
     for generated in classes {
-        for method in generated.methods {
+        for mut method in generated.methods {
+            if let Some(first) = first {
+                method.name_span = crate::span::Span { file: first.file, start: first.start.saturating_sub(1), end: first.start.saturating_sub(1) };
+            }
             if !lc.methods.iter().any(|m| m.name == method.name && m.receiver == method.receiver) {
                 lc.methods.push(method);
             }
         }
+        for mut call in generated.unknown_calls {
+            if let Some(first) = first {
+                call.span = crate::span::Span { file: first.file, start: first.start.saturating_sub(1), end: first.start.saturating_sub(1) };
+            }
+            lc.unknown_calls.push(call);
+        }
     }
-    for (_, _, mut call) in calls {
+    for (_, _, mut call, _) in calls {
         let written = |e: &Expr| matches!(&*e.node, ExprNode::Send { method, .. } if matches!(method.as_str(), "renders_one" | "renders_many"));
         match lc.unknown_calls.iter_mut().find(|u| written(u) && u.span == call.span) {
             Some(kept) => kept.decisions |= crate::expr::REPLAYED_CLASS_BODY,

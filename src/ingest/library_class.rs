@@ -3191,6 +3191,14 @@ fn walk_decl_body_with_visibility<'pr>(
             out.conditional_definitions.push(record);
             continue;
         }
+        // `ruby2_keywords(:m) if respond_to?(:ruby2_keywords, true)` (view_component's `set_slot`): every Ruby this runs
+        // on answers it, so the call is the class's, replayed where it stands, after the `def` it flags.
+        if let Some(call) = ruby2_keywords_guarded(&statement) {
+            let mut expr = ingest_expr(&call, file)?;
+            expr.decisions |= crate::expr::REPLAYED_CLASS_BODY;
+            out.unknown_calls.push(expr);
+            continue;
+        }
         if statement.as_if_node().is_some() || statement.as_unless_node().is_some() {
             Visibility::reject_conditional_declaration(&statement, file)?;
             reject_conditional_accessor(&statement, file)?;
@@ -4585,6 +4593,28 @@ pub(crate) fn synth_mattr_reader(owner: &ClassId, name: &Symbol, receiver: Metho
         mutates_self: false,
         block_param: None,
     }
+}
+
+/// The `ruby2_keywords(...)` call of `ruby2_keywords(...) if respond_to?(:ruby2_keywords, true)`.
+fn ruby2_keywords_guarded<'pr>(statement: &Node<'pr>) -> Option<Node<'pr>> {
+    let branch = statement.as_if_node()?;
+    if branch.subsequent().is_some() {
+        return None;
+    }
+    let guard = branch.predicate().as_call_node()?;
+    let asks = constant_id_str(&guard.name()) == "respond_to?"
+        && guard.receiver().is_none()
+        && guard.arguments().and_then(|a| a.arguments().iter().next()).and_then(|a| a.as_symbol_node()).is_some_and(|s| s.unescaped() == b"ruby2_keywords");
+    if !asks {
+        return None;
+    }
+    let mut body: Vec<Node<'pr>> = branch.statements()?.body().iter().collect();
+    if body.len() != 1 {
+        return None;
+    }
+    let only = body.remove(0);
+    let call = only.as_call_node()?;
+    (constant_id_str(&call.name()) == "ruby2_keywords" && call.receiver().is_none()).then_some(only)
 }
 
 /// Whether a `mattr_*` keeps its instance reader and writer: Rails leaves them out for `instance_accessor: false`, and
