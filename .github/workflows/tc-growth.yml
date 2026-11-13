@@ -5,25 +5,30 @@ on:
 permissions:
   contents: read
 jobs:
-  diff:
+  perf:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
-      - name: The two tests on base and branch
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-rust
+      - name: Emit real-blog with roundhouse main
         run: |
-          sudo apt-get update -q && sudo apt-get install -yq libsqlite3-dev libyaml-dev >/dev/null
-          git clone -q https://github.com/matz/spinel sp
-          git -C sp fetch -q https://github.com/dai199/spinel reopen-head-early:reopen-head-early
-          B=$(git -C sp rev-parse reopen-head-early~1)
-          for V in $B reopen-head-early; do
-            git -C sp checkout -q $V && make -C sp deps >/dev/null && make -C sp all -j4 >/dev/null
-            for t in test/obj_array_walk_method_tail.rb test/object_array_push_element_read.rb; do
-              for i in 1 2; do (cd sp && timeout 120 ./spinel $t -S > /tmp/$(basename $t)-${V:0:7}-$i.out 2>&1; echo "exit=$?" >> /tmp/$(basename $t)-${V:0:7}-$i.out); done
-              (cd sp && timeout 120 ./spinel $t -o /tmp/bin && /tmp/bin > /tmp/$(basename $t)-${V:0:7}.run 2>&1; echo "run exit=$?" >> /tmp/$(basename $t)-${V:0:7}.run)
-            done
-          done
-          for t in obj_array_walk_method_tail.rb object_array_push_element_read.rb; do
-            echo "=== $t base self-diff: $(diff /tmp/$t-${B:0:7}-1.out /tmp/$t-${B:0:7}-2.out | wc -l)"
-            diff /tmp/$t-${B:0:7}-1.out /tmp/$t-reopen--1.out | head -60
-            echo "--- run outputs"; diff /tmp/$t-${B:0:7}.run /tmp/$t-reopen-.run && echo same run; cat /tmp/$t-reopen-.run | head; echo "--- expected"; diff /tmp/$t-reopen-.run <(cat sp/test/$t.expected 2>/dev/null; echo "run exit=0") && echo matches expected
-          done
+          git clone -q https://github.com/roundhouse-rb/roundhouse rh && (cd rh && cargo build --release --bin roundhouse 2>&1 | tail -1)
+          mkdir -p out logs && tar -xzf split-fixtures/real-blog.tar.gz -C split-fixtures
+          rh/target/release/roundhouse --target spinel split-fixtures/real-blog -o out/blog 2>&1 | tail -1
+      - name: perf callees on Spinel master
+        run: |
+          sudo apt-get update -q && sudo apt-get install -yq libsqlite3-dev libyaml-dev linux-tools-common linux-tools-$(uname -r) >/dev/null 2>&1 || sudo apt-get install -yq linux-tools-azure >/dev/null
+          sudo sysctl -w kernel.perf_event_paranoid=-1 >/dev/null
+          git clone -q https://github.com/matz/spinel sp && git -C sp log -1 --oneline
+          make -C sp deps >/dev/null && make -C sp all -j4 OPT='-O2 -g -fno-omit-frame-pointer -fno-inline-functions-called-once -fno-optimize-sibling-calls' >/dev/null
+          ( cd out/blog && perf record -F 999 --call-graph fp -o /tmp/p.data $GITHUB_WORKSPACE/sp/spinel main.rb -c -o /tmp/b.c --force --timing ) > logs/blog.log 2>&1 || true
+          grep -o 'phase=analysis ms=[0-9.]*' logs/blog.log
+          perf script -i /tmp/p.data -F ip,sym 2>/dev/null > /tmp/p.txt
+          python3 tools/callees.py cplan_nil_scalar_reach an_reopen_head_call cplan_user_fresh infer_call_inner cplan_root_closed repr_of nullable_int_value < /tmp/p.txt | tee logs/callees.txt
+          perf report -i /tmp/p.data --children --stdio --percent-limit 1.5 -g none 2>/dev/null | grep -v '^#' | grep -v '^$' | sed -E 's/ \(inlined\)//' | head -80 > logs/children.txt
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: tc-growth-callees
+          path: logs
