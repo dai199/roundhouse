@@ -17,6 +17,7 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
@@ -1157,12 +1158,14 @@ def spinel_toolchain_shard(tests, shard, count=SPINEL_TOOLCHAIN_SHARDS, timings=
     return sorted(mine)
 
 
-def record_timing(kind, name, seconds, ok, timed_out=False):
+def record_timing(kind, name, seconds, ok, timed_out=False, cpu=None):
     if out := os.environ.get("CI_SPINEL_TIMINGS_OUT"):
         Path(out).parent.mkdir(parents=True, exist_ok=True)
         record = {"kind": kind, "name": name, "seconds": max(round(seconds), 1), "ok": ok}
         if timed_out:
             record["timed_out"] = True
+        if cpu is not None:
+            record["cpu"] = round(cpu, 1)
         with open(out, "a") as f:
             f.write(json.dumps(record) + "\n")
 
@@ -1183,16 +1186,24 @@ def run_timed(kind, name, command, charged=0):
         return 124
     # Its own process group: killing the test alone would leave its spinel and cc children on the CPUs.
     proc = subprocess.Popen(command, start_new_session=left is not None)
-    try:
-        status = proc.wait(timeout=left)
-    except subprocess.TimeoutExpired:
+    reaped = {}
+    # Not proc.wait: it reaps the test without its rusage, the CPU seconds of the test and the spinel and cc it waited for.
+    waiter = threading.Thread(target=lambda: reaped.update(zip(("pid", "raw", "usage"), os.wait4(proc.pid, 0))), daemon=True)
+    waiter.start()
+    waiter.join(left)
+    cpu = None
+    if waiter.is_alive():
         os.killpg(proc.pid, signal.SIGKILL)
-        proc.wait()
+        waiter.join()
         print(f"::error::{name} stopped at this shard's deadline")
         status = 124
+    else:
+        status = os.waitstatus_to_exitcode(reaped["raw"])
+        cpu = reaped["usage"].ru_utime + reaped["usage"].ru_stime
+    proc.returncode = status
     charged = charged() if callable(charged) else charged
     # 124 is timeout(1) stopping the command: its seconds are still worth recording.
-    record_timing(kind, name, time.monotonic() - start + charged, status == 0, status == 124)
+    record_timing(kind, name, time.monotonic() - start + charged, status == 0, status == 124, cpu)
     return status
 
 

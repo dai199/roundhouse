@@ -1959,6 +1959,7 @@ jobs:
           sed -n 's/^later //p' "$RUNNER_TEMP/split.txt" | RH_SPINEL_BUNDLE="$RUNNER_TEMP/spinel-bundles" \
             python3 scripts/ci-plan.py run-tests --kind toolchain --parallel "$(nproc)" -- "$SPINEL_TOOLCHAIN_BIN" --ignored --nocapture --exact || status=1
           wait "$alone" || status=1
+          echo "step cpu (user sys of children):"; times
           exit "$status"
       # fixtures/tiny-api, the API-only app (#321): `spin build` of the
       # app entry, HTTP requests to the binary, and the model script
