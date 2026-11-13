@@ -5,51 +5,49 @@ on:
 permissions:
   contents: read
 jobs:
-  empty:
+  measure:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        rh: [main, empty-routes]
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-rust
-      - uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: 4.0.9
       - name: Build roundhouse and emit
         run: |
-          git clone -q https://github.com/dai199/roundhouse rh
-          if [ ${{ matrix.rh }} = main ]; then git -C rh fetch -q https://github.com/roundhouse-rb/roundhouse main && git -C rh checkout -q FETCH_HEAD; else git -C rh checkout -q empty-routes; fi
-          git -C rh log -1 --oneline
+          git clone -q https://github.com/roundhouse-rb/roundhouse rh && git -C rh checkout -q 2961d6e559e6f4c783e235b11c980e25846cd325
           (cd rh && cargo build --release --bin roundhouse)
           mkdir -p out logs
-          rh/target/release/roundhouse --target spinel split-fixtures/empty -o out/spinel 2>&1 | tail -1
-          rh/target/release/roundhouse --target ruby split-fixtures/empty -o out/ruby 2>&1 | tail -1
-      - name: CRuby
-        if: always()
+          tar -xzf split-fixtures/real-blog.tar.gz -C split-fixtures
+          rh/target/release/roundhouse --target spinel split-fixtures/real-blog -o out/blog 2>&1 | tail -1
+          rh/target/release/roundhouse --target spinel split-fixtures/empty -o out/empty 2>&1 | tail -1
+      - name: Base and branch
         run: |
-          set +e
-          cd out/ruby
-          ls; [ -f Gemfile ] && { bundle install --quiet 2>&1 | tail -3 || true; }
-          echo "--- CGI GET /"
-          REQUEST_METHOD=GET PATH_INFO=/ QUERY_STRING= HTTP_HOST=localhost timeout 60 bundle exec ruby main.rb 2>&1 | head -12 || echo "cgi exit=$?"
-          echo "--- puma GET / and /widgets"
-          (timeout 90 bundle exec puma -b tcp://127.0.0.1:4567 config.ru > /tmp/rack.log 2>&1 &)
-          for i in $(seq 1 40); do curl -s -o /dev/null 127.0.0.1:4567/ && break; sleep 1; done
-          for p in / /widgets; do echo "GET $p -> $(curl -s -o /tmp/body -w '%{http_code}' 127.0.0.1:4567$p)"; head -c 200 /tmp/body 2>/dev/null; echo; done
-          tail -25 /tmp/rack.log; grep -n -i "rack\|puma\|falcon" Gemfile | head
-      - name: Spinel native
-        if: always()
-        run: |
-          set +e
           sudo apt-get update -q && sudo apt-get install -yq libsqlite3-dev libyaml-dev
-          git clone -q https://github.com/matz/spinel sp && git -C sp log -1 --oneline
-          make -C sp deps >/dev/null && make -C sp all -j4 >/dev/null
-          cd out/spinel
-          ( $GITHUB_WORKSPACE/sp/spinel main.rb -o /tmp/app-bin ) > ../../logs/spinel.log 2>&1 && echo "build ok" || { echo "build refused"; grep -v '^spinel-timing' ../../logs/spinel.log | tail -5; exit 0; }
-          (timeout 60 /tmp/app-bin -p 4568 > /tmp/app.log 2>&1 &)
-          for i in $(seq 1 30); do curl -s -o /dev/null 127.0.0.1:4568/ && break; sleep 1; done
-          for p in / /widgets; do echo "GET $p -> $(curl -s -o /tmp/body -w '%{http_code}' 127.0.0.1:4568$p)"; head -c 200 /tmp/body 2>/dev/null; echo; done
-          tail -10 /tmp/app.log
+          git clone -q https://github.com/matz/spinel sp
+          git -C sp fetch -q https://github.com/dai199/spinel reopen-head-early:reopen-head-early
+          git -C sp rev-parse reopen-head-early~1 > /tmp/base.sha
+          find sp/test -name '*.rb' | sed 's|^sp/||' | sort > /tmp/tests.txt
+          cat > /tmp/one.sh <<'X'
+          f="$1"; o=/tmp/corp/$V/$(echo "$f" | tr / _)
+          cd $GITHUB_WORKSPACE/sp && timeout 120 ./spinel "$f" -S > "$o" 2>&1; echo "exit=$?" >> "$o"
+          X
+          for V in base reopen-head-early; do
+            if [ $V = base ]; then git -C sp checkout -q $(cat /tmp/base.sha); else git -C sp checkout -q $V; fi
+            make -C sp deps >/dev/null && make -C sp all -j4 OPT='-O2 -g -fno-omit-frame-pointer' >/dev/null && git -C sp log -1 --oneline
+            for a in blog empty; do for i in 1 2; do
+              ( cd out/$a && $GITHUB_WORKSPACE/sp/spinel main.rb -c -o /tmp/$a-$V.c --force --timing ) > logs/$a-$V-$i.log 2>&1 || echo "$a $V FAILED"
+              echo "$a $V #$i $(grep -o 'phase=analysis ms=[0-9.]*' logs/$a-$V-$i.log) $(grep -o 'phase=analysis_fixpoint ms=[0-9.]* rounds=[0-9]*' logs/$a-$V-$i.log)"
+            done; done
+            mkdir -p /tmp/corp/$V
+            export V; xargs -P4 -n1 bash /tmp/one.sh < /tmp/tests.txt
+          done | tee logs/apps.txt
+          sudo apt-get install -yq linux-tools-common linux-tools-$(uname -r) >/dev/null 2>&1 || sudo apt-get install -yq linux-tools-azure >/dev/null 2>&1; sudo sysctl -w kernel.perf_event_paranoid=-1 >/dev/null
+          ( cd out/blog && perf record -F 499 --call-graph fp -o /tmp/p.data $GITHUB_WORKSPACE/sp/spinel main.rb -c -o /tmp/pb.c --force ) > /dev/null 2>&1 || true
+          perf report -i /tmp/p.data --children --stdio --percent-limit 1 -g none 2>/dev/null | grep -v '^#' | grep -v '^$' | sed -E 's/ \(inlined\)//' | head -120 > logs/children.txt
+          for a in blog empty; do cmp -s /tmp/$a-base.c /tmp/$a-reopen-head-early.c && echo "$a C identical" || echo "$a C DIFFERS"; done | tee -a logs/apps.txt
+          echo "corpus: $(wc -l < /tmp/tests.txt) files, $(diff -rq /tmp/corp/base /tmp/corp/reopen-head-early | wc -l) differ" | tee -a logs/apps.txt
+          diff -rq /tmp/corp/base /tmp/corp/reopen-head-early | head -50 > logs/corpus-diff.txt || true
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: tc-growth-fix2
+          path: logs
