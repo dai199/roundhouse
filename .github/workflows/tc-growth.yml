@@ -23,9 +23,8 @@ jobs:
           git clone -q https://github.com/matz/spinel sp && git -C sp log -1 --oneline
           make -C sp deps >/dev/null && make -C sp all -j4 >/dev/null
           for a in empty bare; do
-            ( cd out/$a && $GITHUB_WORKSPACE/sp/spinel main.rb -c -o /tmp/$a.c --force ) > logs/spinel-$a.log 2>&1; echo "$a exit=$?"; grep -v '^spinel-timing' logs/spinel-$a.log | tail -5
-            l=$(grep -o 'main.rb:[0-9]*' logs/spinel-$a.log | head -1 | cut -d: -f2)
-            [ -n "$l" ] && sed -n "$((l-15)),$((l+5))p" out/$a/main.rb
+            ( cd out/$a && $GITHUB_WORKSPACE/sp/spinel main.rb -c -o /tmp/$a.c --force ) > logs/spinel-$a.log 2>&1 && echo "$a ok" || echo "$a refused"
+            grep -v '^spinel-timing' logs/spinel-$a.log | tail -5 || true
           done
           tar -czf logs/out.tgz out
       - uses: actions/upload-artifact@v6
