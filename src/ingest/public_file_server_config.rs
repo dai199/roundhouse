@@ -498,7 +498,12 @@ fn read_file<V: Vfs + ?Sized>(vfs: &V, path: &Path, setting: &Setting, rails: Op
     } else { src
         .lines()
         .map(|line| line.split('#').next().unwrap_or(""))
-        .map(|code| code.matches(path_text.as_str()).count())
+        // Not a longer name the setting's spells the start of (`config.eager_load_paths` beside `eager_load`).
+        .map(|code| {
+            code.match_indices(path_text.as_str())
+                .filter(|(at, m)| !code[at + m.len()..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_'))
+                .count()
+        })
         .sum() };
     let refused = if mentioned > count(&found) {
         Some(format!(

@@ -1979,12 +1979,17 @@ pub(crate) fn compiled_on_the_ruby_family(app: &App) -> crate::det::HashSet<Stri
     // with only activesupport in its dependencies), and the real gem would load the real framework too.
     let requires_the_framework = |gem: &str| {
         let Some(version) = lock.version_of(gem) else { return false };
-        app.file_programs.iter().filter(|p| crate::ingest::source_gems::file_of(&p.source, gem, version)).any(|p| {
-            crate::project::all_program_items(&p.items).into_iter().any(|item| {
-                matches!(item, crate::app::ProgramItem::Require { feature, relative: false, .. }
-                    if matches!(feature.split('/').next(), Some("rails" | "action_view" | "action_controller" | "action_dispatch" | "active_model" | "active_record" | "action_mailer" | "active_job")))
+        fn requires(items: &[crate::app::ProgramItem]) -> bool {
+            items.iter().any(|item| match item {
+                crate::app::ProgramItem::Require { feature, relative: false, .. } => matches!(
+                    feature.split('/').next(),
+                    Some("rails" | "action_view" | "action_controller" | "action_dispatch" | "active_model" | "active_record" | "action_mailer" | "active_job")
+                ),
+                crate::app::ProgramItem::Branch { then_items, else_items, .. } => requires(then_items) || requires(else_items),
+                _ => false,
             })
-        })
+        }
+        app.file_programs.iter().filter(|p| crate::ingest::source_gems::file_of(&p.source, gem, version)).any(|p| requires(&p.items))
     };
     let mut kept: crate::det::HashSet<String> =
         app.auto_source_gems.iter().filter(|g| needs_railties(g) || requires_the_framework(g)).cloned().collect();
