@@ -118,6 +118,12 @@ impl InstanceCallParams {
         // (OmniAuth's `AuthHash.new(:provider => name)`, a Hash subclass whose modules hook `included`).
         if app.native_library_keywords {
             unknown_new.retain(|class| !descends_from_core_container(app, class));
+            // Not a library class where its keywords are native (the Ruby family, Spinel): the call keeps them as
+            // written, so no slot is bound that an unverified `new` could take otherwise (a component under
+            // view_component's `inherited`).
+            if app.native_library_keywords {
+                unknown_new.retain(|class| !app.library_classes.iter().any(|c| c.name.0.as_str() == class));
+            }
         }
         Self {
             slots,

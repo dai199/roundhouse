@@ -1281,6 +1281,12 @@ pub(crate) fn method_missing_readers() -> &'static [(&'static str, &'static [(&'
     ]
 }
 
+/// A class macro this file writes the methods of, which the class-macro expansion leaves as a call (view_component's
+/// `renders_one` / `renders_many`, [`view_component_slots`]).
+pub(super) fn macro_written_by_hook(lineage: &[crate::ident::ClassId], method: &str) -> bool {
+    matches!(method, "renders_one" | "renders_many") && lineage.iter().any(|c| c.0.as_str() == "ViewComponent::Base")
+}
+
 /// Where [`view_component_templates`] writes the gem's methods it replaces.
 const VIEW_COMPONENT_HOOK: &str = "(roundhouse)/view_component.rb";
 
@@ -1437,9 +1443,12 @@ fn view_component_slots<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V, pat
     }
     for (_, _, mut call) in calls {
         let written = |e: &Expr| matches!(&*e.node, ExprNode::Send { method, .. } if matches!(method.as_str(), "renders_one" | "renders_many"));
-        if !lc.unknown_calls.iter().any(|u| written(u) && u.span == call.span) {
-            call.decisions |= crate::expr::REPLAYED_CLASS_BODY;
-            lc.unknown_calls.push(call);
+        match lc.unknown_calls.iter_mut().find(|u| written(u) && u.span == call.span) {
+            Some(kept) => kept.decisions |= crate::expr::REPLAYED_CLASS_BODY,
+            None => {
+                call.decisions |= crate::expr::REPLAYED_CLASS_BODY;
+                lc.unknown_calls.push(call);
+            }
         }
     }
 }

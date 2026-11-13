@@ -88,18 +88,32 @@ fn app() -> Option<emit_and_run::Overlay> {
     Some(overlay)
 }
 
-/// What the gem still does that no tree answers, none of which this render reaches: its previews (a development-only
-/// page of the engine), its test helpers' conditional visibility, the engine's Railtie and `Rails::Engine` itself.
-const KNOWN_GAPS: [&str; 9] = [
+/// What the gem still does that no tree answers, none of which these renders reach: its previews (a development-only
+/// page of the engine) and test helpers, the engine's Railtie and `Rails::Engine`, the runtime template compiler this
+/// tree replaces (`ActionView::Template`, its `class_eval`s), translations (`I18n` internals, keyword splats through
+/// `super`), collections (`ActionView::PartialIteration`), and method_source's computed requires.
+const KNOWN_GAPS: [&str; 21] = [
     "@render_args has no known type",
     "@example_name has no known type",
     "@preview has no known type",
+    "@previews has no known type",
     "@view_renderer has no known type",
     "render with a block not supported (all targets)",
+    "render of an object not supported (all targets)",
     "conditional or dynamic visibility declarations are not modeled",
     "railtie middleware not supported (all targets)",
     "constant not supported (all targets): Rails::Engine",
-    "render of an object not supported (all targets)",
+    "constant not supported (all targets): ActionView::Template",
+    "Module protocol not supported (all targets): class_eval requires",
+    "Module protocol not supported (all targets): define_method requires",
+    "Module protocol not supported (all targets): method_defined? requires",
+    "constant not supported (all targets): I18n::RESERVED_KEYS",
+    "constant not supported (all targets): I18n::MissingTranslation",
+    "keyword splat in ordinary super not supported",
+    "keyword splat into full argument forwarding not supported",
+    "constant not supported (all targets): ActionView::PartialIteration",
+    "`<` with incompatible operand types",
+    "file_statement_unsupported not supported (ruby)",
 ];
 
 #[test]
