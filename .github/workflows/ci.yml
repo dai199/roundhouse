@@ -103,6 +103,8 @@ jobs:
           path: .ci-timings/spinel-timings.json
           key: spinel-timings-${{ github.run_id }}
           restore-keys: spinel-timings-
+      - name: Fork measurement only - plan on the first run's CPU seconds
+        run: mkdir -p .ci-timings && cp ci-timings-fork.json .ci-timings/spinel-timings.json
       - name: Select required coverage from the event's actual tree
         id: plan
         env:
