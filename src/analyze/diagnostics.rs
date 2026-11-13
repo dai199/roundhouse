@@ -309,7 +309,8 @@ fn unmodeled_block_renders(app: &App) -> Vec<Diagnostic> {
     let carrying = crate::lower::view_to_library::yield_carrying_partials(app);
     let reason = |e: &Expr, caller_dir: &str| -> Option<&'static str> {
         let ExprNode::Send { recv, method, args, block: Some(block), .. } = &*e.node else { return None };
-        if method.as_str() != "render" || recv.is_some() {
+        // Not an object that renders itself: the lowering hands the block to its `render_in` (a component's slots).
+        if method.as_str() != "render" || recv.is_some() || crate::lower::renderable::rendered_object(app, e).is_some() {
             return None;
         }
         let Some(RenderPartial::LayoutBlock { layout, locals, block }) =

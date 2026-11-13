@@ -2741,6 +2741,13 @@ end
         }
     }
 
+    // A component's sidecar template, whose `call` view_component_templates compiles after the drain.
+    for template in component_templates(vfs, &dir.join("app/components")) {
+        if let Ok(text) = vfs.read_to_string(&template) {
+            super::sources::register(&template.display().to_string(), &text);
+        }
+    }
+
     // Every app source is registered by here. Rubydex resolves a
     // SNAPSHOT on another thread while the passes below run, and those
     // passes read the same snapshot. It is not the real `drain`: the
@@ -9430,6 +9437,19 @@ fn boot_source_files<V: Vfs + ?Sized>(
     files.sort();
     files.dedup();
     Ok(files)
+}
+
+fn component_templates<V: Vfs + ?Sized>(vfs: &V, dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for entry in vfs.read_dir(dir).unwrap_or_default() {
+        if vfs.is_dir(&entry) {
+            out.extend(component_templates(vfs, &entry));
+        } else if entry.to_str().is_some_and(|path| path.ends_with(".erb")) {
+            out.push(entry);
+        }
+    }
+    out.sort();
+    out
 }
 
 pub(super) fn read_rb_files<V: Vfs + ?Sized>(vfs: &V, dir: &Path) -> IngestResult<Vec<PathBuf>> {

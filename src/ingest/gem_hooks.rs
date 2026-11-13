@@ -1304,6 +1304,17 @@ pub(super) fn view_component_templates<V: crate::vfs::Vfs + ?Sized>(app: &mut Ap
     if !app.library_classes.iter().any(|c| c.name.0.as_str() == "ViewComponent::Base") {
         return;
     }
+    // Not the drained registry as it is: a file registered here would take the id of one of the app's (FileId(1) is
+    // config/application.rb), and its spans would read that file's lines and constants.
+    super::sources::resume(&app.sources);
+    compile_components(app, vfs);
+    // Not kept in the app's sources: another file there is one the index has not read, and the analysis would index
+    // them all again; the generated files' constants read the program's classes instead.
+    super::sources::drain();
+}
+
+fn compile_components<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V) {
+    let indexed = app.sources.len();
     let hook = "module ViewComponent\n  class Compiler\n    def compile(raise_errors: false, force: false)\n      return if compiled? && !force\n      return if @component == ViewComponent::Base\n      @component.validate_initialization_parameters! if raise_errors\n      @component.register_default_slots\n      @component.build_i18n_backend\n      CompileCache.register(@component)\n    end\n  end\n\n  class Base\n    def render_template_for(variant = nil, format = nil)\n      call\n    end\n\n    def self.inherited(child)\n      compile\n      if defined?(Rails) && Rails.application && !(child < Rails.application.routes.url_helpers)\n        child.include Rails.application.routes.url_helpers\n      end\n      child.identifier = caller_locations(1, 10).reject { |l| l.base_label == \"inherited\" }[0].path\n      if defined?(Rails) && Rails.application\n        child.virtual_path = child.identifier.gsub(/(.*#{Regexp.quote(ViewComponent::Base.config.view_component_path)})|(\\.rb)/, \"\")\n      end\n      child.with_collection_parameter provided_collection_parameter\n      super\n    end\n\n    def self.renders_one(slot_name, callable = nil)\n      validate_singular_slot_name(slot_name)\n      validate_plural_slot_name(ActiveSupport::Inflector.pluralize(slot_name).to_sym)\n      register_slot(slot_name, collection: false, callable: callable)\n    end\n\n    def self.renders_many(slot_name, callable = nil)\n      validate_plural_slot_name(slot_name)\n      validate_singular_slot_name(ActiveSupport::Inflector.singularize(slot_name).to_sym)\n      register_slot(slot_name, collection: true, callable: callable)\n    end\n\n    def self.define_slot(slot_name, collection:, callable:)\n      slot = {collection: collection}\n      return slot unless callable\n      if callable.respond_to?(:method_defined?) && callable.method_defined?(:render_in)\n        slot[:renderable] = callable\n      elsif callable.is_a?(String)\n        slot[:renderable_class_name] = callable\n      elsif callable.respond_to?(:call)\n        slot[:renderable_function] = instance_method(:\"_call_#{slot_name}\")\n      else\n        raise(InvalidSlotDefinitionError)\n      end\n      slot\n    end\n\n    def self.register_polymorphic_slot(slot_name, types, collection:)\n      raise NotImplementedError, \"roundhouse: polymorphic slots are not supported\"\n    end\n\n    def self.use_helper(helper_method, from: nil, prefix: false)\n      raise NotImplementedError, \"roundhouse: use_helpers is not supported\"\n    end\n  end\nend\n";
     if let Ok(replacements) = super::library_class::ingest_library_classes(hook.as_bytes(), VIEW_COMPONENT_HOOK) {
         for replacement in replacements {
@@ -1349,10 +1360,14 @@ pub(super) fn view_component_templates<V: crate::vfs::Vfs + ?Sized>(app: &mut Ap
             if lc.methods.iter().any(|m| m.name.as_str() == "call" && m.receiver == crate::dialect::MethodReceiver::Instance) {
                 continue;
             }
-            super::sources::register(&template, &source);
+            let late = super::sources::register(&template, &source).0 as usize > indexed;
             let (compiled, map) = crate::erb::compile_erb_mapped(&source);
             let Ok(mut body) = super::expr::ingest_ruby_program(&compiled, &template) else { continue };
             crate::erb::translate_spans(&mut body, &map);
+            // Not its own file's: one outside the app's `app/components` (a gem's) was not registered before the index.
+            if late {
+                synthetic_constants(&mut body);
+            }
             escape_template_output(&mut body);
             let mut call = super::library_class::synth_mattr_reader(class, &crate::ident::Symbol::from("call"), crate::dialect::MethodReceiver::Instance);
             call.body = body;
@@ -1370,11 +1385,6 @@ fn synthetic_constants(e: &mut Expr) {
     e.node.for_each_child_mut(&mut |c| synthetic_constants(c));
 }
 
-/// A component's `renders_one :name[, callable]` / `renders_many :names[, callable]`: the macro `define_method`s its
-/// slot's methods with `*args, &block` under `ruby2_keywords` (written here with `**kwargs`, which reach `set_slot`'s
-/// own `ruby2_keywords` the same way), and a callable lambda's as `_call_<name>`, which the class-macro expansion
-/// cannot carry. The slot's methods are written here as the gem defines them, for the analysis and every target, and
-/// the call itself runs in the class body as Ruby loads it, which registers the slot as the gem does.
 fn unsupported_component_macro(call: &ruby_prism::CallNode<'_>) -> Option<&'static str> {
     match super::util::constant_id_str(&call.name()).as_ref() as &str {
         "renders_one" | "renders_many" => {
@@ -1393,6 +1403,11 @@ fn unsupported_component_macro(call: &ruby_prism::CallNode<'_>) -> Option<&'stat
     }
 }
 
+/// A component's `renders_one :name[, callable]` / `renders_many :names[, callable]`: the macro `define_method`s its
+/// slot's methods with `*args, &block` under `ruby2_keywords` (written here with `**kwargs`, which reach `set_slot`'s
+/// own `ruby2_keywords` the same way), and a callable lambda's as `_call_<name>`, which the class-macro expansion
+/// cannot carry. The slot's methods are written here as the gem defines them, for the analysis and every target, and
+/// the call itself runs in the class body as Ruby loads it, which registers the slot as the gem does.
 fn view_component_slots<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V, path: &str, class: &crate::ident::ClassId) {
     let Ok(text) = vfs.read_to_string(std::path::Path::new(path)) else { return };
     let parsed = ruby_prism::parse(text.as_bytes());
@@ -1509,6 +1524,7 @@ fn view_component_slots<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V, pat
     let first = calls.iter().map(|(_, _, call, _)| call.span).min_by_key(|span| span.start);
     for generated in classes {
         for mut method in generated.methods {
+            synthetic_constants(&mut method.body);
             if let Some(first) = first {
                 method.name_span = crate::span::Span { file: first.file, start: first.start.saturating_sub(1), end: first.start.saturating_sub(1) };
             }
@@ -1517,6 +1533,7 @@ fn view_component_slots<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V, pat
             }
         }
         for mut call in generated.unknown_calls {
+            synthetic_constants(&mut call);
             if let Some(first) = first {
                 call.span = crate::span::Span { file: first.file, start: first.start.saturating_sub(1), end: first.start.saturating_sub(1) };
             }
