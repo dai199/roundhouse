@@ -5,30 +5,46 @@ on:
 permissions:
   contents: read
 jobs:
-  perf:
+  measure:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-rust
-      - name: Emit real-blog with roundhouse main
+      - name: Build roundhouse and emit
         run: |
-          git clone -q https://github.com/roundhouse-rb/roundhouse rh && (cd rh && cargo build --release --bin roundhouse 2>&1 | tail -1)
-          mkdir -p out logs && tar -xzf split-fixtures/real-blog.tar.gz -C split-fixtures
+          git clone -q https://github.com/roundhouse-rb/roundhouse rh && git -C rh log -1 --oneline
+          (cd rh && cargo build --release --bin roundhouse)
+          mkdir -p out logs
+          tar -xzf split-fixtures/real-blog.tar.gz -C split-fixtures
           rh/target/release/roundhouse --target spinel split-fixtures/real-blog -o out/blog 2>&1 | tail -1
-      - name: perf callees on Spinel master
+          rh/target/release/roundhouse --target spinel split-fixtures/empty -o out/empty 2>&1 | tail -1
+      - name: Base and branch
         run: |
-          sudo apt-get update -q && sudo apt-get install -yq libsqlite3-dev libyaml-dev linux-tools-common linux-tools-$(uname -r) >/dev/null 2>&1 || sudo apt-get install -yq linux-tools-azure >/dev/null
-          sudo sysctl -w kernel.perf_event_paranoid=-1 >/dev/null
-          git clone -q https://github.com/matz/spinel sp && git -C sp log -1 --oneline
-          make -C sp deps >/dev/null && make -C sp all -j4 OPT='-O2 -g -fno-omit-frame-pointer -fno-inline-functions-called-once -fno-optimize-sibling-calls' >/dev/null
-          ( cd out/blog && perf record -F 999 --call-graph fp -o /tmp/p.data $GITHUB_WORKSPACE/sp/spinel main.rb -c -o /tmp/b.c --force --timing ) > logs/blog.log 2>&1 || true
-          grep -o 'phase=analysis ms=[0-9.]*' logs/blog.log
-          perf script -i /tmp/p.data -F ip,sym 2>/dev/null > /tmp/p.txt
-          python3 tools/callees.py cplan_nil_scalar_reach an_reopen_head_call cplan_user_fresh infer_call_inner cplan_root_closed repr_of nullable_int_value < /tmp/p.txt | tee logs/callees.txt
-          perf report -i /tmp/p.data --children --stdio --percent-limit 1.5 -g none 2>/dev/null | grep -v '^#' | grep -v '^$' | sed -E 's/ \(inlined\)//' | head -80 > logs/children.txt
+          sudo apt-get update -q && sudo apt-get install -yq libsqlite3-dev libyaml-dev
+          git clone -q https://github.com/matz/spinel sp
+          git -C sp fetch -q https://github.com/dai199/spinel nil-scalar-fast:nil-scalar-fast
+          git -C sp rev-parse nil-scalar-fast~1 > /tmp/base.sha
+          find sp/test -name '*.rb' | sed 's|^sp/||' | sort > /tmp/tests.txt
+          cat > /tmp/one.sh <<'X'
+          f="$1"; o=/tmp/corp/$V/$(echo "$f" | tr / _)
+          cd $GITHUB_WORKSPACE/sp && timeout 120 ./spinel "$f" -S > "$o" 2>&1; echo "exit=$?" >> "$o"
+          X
+          for V in base nil-scalar-fast; do
+            if [ $V = base ]; then git -C sp checkout -q $(cat /tmp/base.sha); else git -C sp checkout -q $V; fi
+            make -C sp deps >/dev/null && make -C sp all -j4 >/dev/null && git -C sp log -1 --oneline
+            for a in blog empty; do for i in 1 2; do
+              ( cd out/$a && $GITHUB_WORKSPACE/sp/spinel main.rb -c -o /tmp/$a-$V.c --force --timing ) > logs/$a-$V-$i.log 2>&1 || echo "$a $V FAILED"
+              echo "$a $V #$i $(grep -o 'phase=analysis ms=[0-9.]*' logs/$a-$V-$i.log) $(grep -o 'phase=analysis_fixpoint ms=[0-9.]* rounds=[0-9]*' logs/$a-$V-$i.log)"
+            done; done
+            mkdir -p /tmp/corp/$V
+            export V; xargs -P4 -n1 bash /tmp/one.sh < /tmp/tests.txt
+          done | tee logs/apps.txt
+          for a in blog empty; do cmp -s /tmp/$a-base.c /tmp/$a-nil-scalar-fast.c && echo "$a C identical" || echo "$a C DIFFERS"; done | tee -a logs/apps.txt
+          echo "corpus: $(wc -l < /tmp/tests.txt) files, $(diff -rq /tmp/corp/base /tmp/corp/nil-scalar-fast | wc -l) differ" | tee -a logs/apps.txt
+          diff -rq /tmp/corp/base /tmp/corp/nil-scalar-fast | head -50 > logs/corpus-diff.txt || true
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: tc-growth-callees
+          name: tc-growth-fix3
           path: logs
