@@ -35,8 +35,8 @@ jobs:
           ls; [ -f Gemfile ] && { bundle install --quiet 2>&1 | tail -3 || true; }
           echo "--- CGI GET /"
           REQUEST_METHOD=GET PATH_INFO=/ QUERY_STRING= HTTP_HOST=localhost timeout 60 bundle exec ruby main.rb 2>&1 | head -12 || echo "cgi exit=$?"
-          echo "--- rackup GET / and /widgets"
-          (timeout 90 bundle exec rackup -p 4567 -o 127.0.0.1 > /tmp/rack.log 2>&1 &)
+          echo "--- puma GET / and /widgets"
+          (timeout 90 bundle exec puma -b tcp://127.0.0.1:4567 config.ru > /tmp/rack.log 2>&1 &)
           for i in $(seq 1 40); do curl -s -o /dev/null 127.0.0.1:4567/ && break; sleep 1; done
           for p in / /widgets; do echo "GET $p -> $(curl -s -o /tmp/body -w '%{http_code}' 127.0.0.1:4567$p)"; head -c 200 /tmp/body 2>/dev/null; echo; done
           tail -25 /tmp/rack.log; grep -n -i "rack\|puma\|falcon" Gemfile | head
@@ -48,8 +48,8 @@ jobs:
           git clone -q https://github.com/matz/spinel sp && git -C sp log -1 --oneline
           make -C sp deps >/dev/null && make -C sp all -j4 >/dev/null
           cd out/spinel
-          ( $GITHUB_WORKSPACE/sp/spinel main.rb -o app ) > ../../logs/spinel.log 2>&1 && echo "build ok" || { echo "build refused"; grep -v '^spinel-timing' ../../logs/spinel.log | tail -5; exit 0; }
-          (timeout 60 ./app -p 4568 > /tmp/app.log 2>&1 &)
+          ( $GITHUB_WORKSPACE/sp/spinel main.rb -o /tmp/app-bin ) > ../../logs/spinel.log 2>&1 && echo "build ok" || { echo "build refused"; grep -v '^spinel-timing' ../../logs/spinel.log | tail -5; exit 0; }
+          (timeout 60 /tmp/app-bin -p 4568 > /tmp/app.log 2>&1 &)
           for i in $(seq 1 30); do curl -s -o /dev/null 127.0.0.1:4568/ && break; sleep 1; done
           for p in / /widgets; do echo "GET $p -> $(curl -s -o /tmp/body -w '%{http_code}' 127.0.0.1:4568$p)"; head -c 200 /tmp/body 2>/dev/null; echo; done
           tail -10 /tmp/app.log
