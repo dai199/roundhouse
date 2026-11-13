@@ -316,6 +316,10 @@ pub(super) fn folds_true(cond: &Expr) -> bool {
             ExprNode::Send { recv: Some(r), method, args, block: None, .. } if method.as_str() == "to_f" && args.is_empty() => match &*r.node {
                 ExprNode::Lit { value: Literal::Str { value } } => {
                     let digits: String = value.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                    // Not a mantissa an exponent follows (`"1.2e-2".to_f`), which Ruby reads whole.
+                    if value[digits.len()..].starts_with(['e', 'E']) {
+                        return None;
+                    }
                     let digits = match digits.match_indices('.').nth(1) {
                         Some((second, _)) => digits[..second].to_string(),
                         None => digits,
@@ -326,6 +330,20 @@ pub(super) fn folds_true(cond: &Expr) -> bool {
             },
             _ => None,
         }
+    }
+    // Not a condition that calls anything (`Boot.prepare! || true`): settling it would drop the call.
+    fn pure(e: &Expr) -> bool {
+        match &*e.node {
+            ExprNode::Lit { .. } => true,
+            ExprNode::BoolOp { left, right, .. } => pure(left) && pure(right),
+            ExprNode::Send { recv: Some(r), method, args, block: None, .. } => {
+                matches!(method.as_str(), "to_f" | "to_i" | ">=" | ">" | "<=" | "<" | "==" | "!") && pure(r) && args.iter().all(pure)
+            }
+            _ => false,
+        }
+    }
+    if !pure(cond) {
+        return false;
     }
     match &*cond.node {
         ExprNode::Lit { value: Literal::Bool { value } } => *value,
@@ -1496,6 +1514,10 @@ impl Replayer<'_> {
         for (at, node) in nodes.iter().enumerate() {
             let expr = super::expr::ingest_expr(node, &self.file).ok()?;
             let Some(expr) = self.statement(expr)? else { continue };
+            // A `next` the replay settled already (`next if true`): nothing after it runs.
+            if matches!(&*expr.node, ExprNode::Next { value: None }) {
+                return Some(out);
+            }
             // An initializer block's `next if cond` leaves the block: the statements after it run only when `cond` is
             // false. Not replayed as written, where a top-level `next` is no Ruby.
             if let ExprNode::If { cond, then_branch, else_branch } = &*expr.node

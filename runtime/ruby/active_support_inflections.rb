@@ -154,6 +154,16 @@ end
 # constantization, transliteration, and parameterization remain unexposed.
 module ActiveSupport
   module Inflector
+    # Rails' `Inflector.pluralize(word)` and `singularize(word)` under the default rules (view_component names a
+    # slot's methods with them); the String forms' own ports answer.
+    def self.pluralize(word)
+      ::Inflector.pluralize_word(word.to_s, 2)
+    end
+
+    def self.singularize(word)
+      ActiveSupport.singularize(word.to_s)
+    end
+
     # Rails' camelize with the default (upper camel case) and lower-camel
     # option. A slash separates namespaces; an underscore starts a new word.
     def self.camelize(text, uppercase_first_letter = true)

@@ -1,6 +1,7 @@
 //! view_component compiled from its installed source: a view's `render(GreetingComponent.new(...))` reaches the gem's
 //! `render_in`, and the component's sidecar template, compiled into its `call` when the app is read, writes the markup
-//! Rails 8.1.4 renders for it (`render?`, a component method, an ivar and a view helper).
+//! view_component 3.23.2 renders for it on Rails 7.2.2.1 (maybe's versions): `render?`, a component method, an ivar and
+//! a view helper; and with a block, its `content` and its `renders_one` / `renders_many` slots, escaped as Rails does.
 
 #[path = "../support/prerequisite.rs"]
 mod prerequisite;
@@ -36,10 +37,16 @@ const COMPONENT: &str = "class GreetingComponent < ViewComponent::Base\n  def in
 
 const TEMPLATE: &str = "<p class=\"greeting\">Hello, <%= shout %>! (<%= pluralize(@count, \"article\") %>)</p>\n";
 
+const CARD: &str = "class CardComponent < ViewComponent::Base\n  renders_one :header\n  renders_many :items\n\n  def initialize(tone: \"plain\")\n    @tone = tone\n  end\nend\n";
+
+const CARD_TEMPLATE: &str = "<div class=\"card card-<%= @tone %>\">\n  <% if header? %><h2><%= header %></h2><% end %>\n  <ul><% items.each do |item| %><li><%= item %></li><% end %></ul>\n  <div class=\"body\"><%= content %></div>\n</div>\n";
+
 const SCRIPT: &str = r#"io = +""
 Views::Articles.index_into(io, Article.all, nil, nil)
 expected = "<p class=\"greeting\">Hello, BLOG! (0 articles)</p>"
 raise "component:\n#{io}" unless io.include?(expected)
+card = "<div class=\"card card-warm\">\n  <h2>Title &lt;b&gt;</h2>\n  <ul><li>one</li><li>two</li></ul>\n  <div class=\"body\">\n  Body text\n</div>\n</div>"
+raise "card:\n#{io}" unless io.include?(card)
 puts "view_component passed"
 "#;
 
@@ -61,10 +68,12 @@ fn app() -> Option<emit_and_run::Overlay> {
         .write(".bundle/config", "---\nBUNDLE_PATH: \"vendor/bundle\"\n")
         .write("app/components/greeting_component.rb", COMPONENT)
         .write("app/components/greeting_component.html.erb", TEMPLATE)
+        .write("app/components/card_component.rb", CARD)
+        .write("app/components/card_component.html.erb", CARD_TEMPLATE)
         .edit(
             "app/views/articles/index.html.erb",
             "<% content_for :title, \"Articles\" %>\n",
-            "<% content_for :title, \"Articles\" %>\n<%= render(GreetingComponent.new(name: \"blog\", count: @articles.size)) %>\n",
+            "<% content_for :title, \"Articles\" %>\n<%= render(GreetingComponent.new(name: \"blog\", count: @articles.size)) %>\n<%= render(CardComponent.new(tone: \"warm\")) do |card| %>\n  <% card.with_header { \"Title <b>\" } %>\n  <% card.with_item { \"one\" } %>\n  <% card.with_item { \"two\" } %>\n  Body text\n<% end %>\n",
         );
     for (name, version) in GEMS {
         let gem = installed(name, version)?;
