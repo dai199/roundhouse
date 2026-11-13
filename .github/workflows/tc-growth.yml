@@ -31,7 +31,7 @@ jobs:
         run: |
           sudo apt-get update -q && sudo apt-get install -yq libsqlite3-dev libyaml-dev
           git clone -q https://github.com/matz/spinel sp
-          if [ ${{ matrix.half }} = a ]; then PTS='d7786278 7884424a7 f4236410b e12d53276 b7c584c18 17dc13569 7e58b7fb8 63742e2bf'; else PTS='d7786278 e60c7ec35 72208b6da e2bbc620c 50408d915 f0505284c 3afb6114f 63742e2bf'; fi
+          if [ ${{ matrix.half }} = a ]; then PTS='e60c7ec35 af1917573 f22481144 e47098479 d674b17a7 7561246a3 5662fd1a7 7b1b0f8a5 d95b10030'; else PTS='e60c7ec35 272a21b03 654f662f8 9cfe01ce2 522c751d3 3ed74a506 f99fa606f 72208b6da'; fi
           for V in $PTS; do
             git -C sp checkout -q $V && make -C sp deps >/dev/null && make -C sp all -j4 >/dev/null && git -C sp log -1 --oneline
             for a in empty; do for i in 1; do
