@@ -22184,6 +22184,8 @@ mod load_time_constants;
 mod doorkeeper;
 #[path = "emit_and_run/render_object.rs"]
 mod render_object;
+#[path = "emit_and_run/view_component.rs"]
+mod view_component;
 #[path = "emit_and_run/model_mixin_macro.rs"]
 mod model_mixin_macro;
 #[path = "emit_and_run/controller_append_callbacks.rs"]
