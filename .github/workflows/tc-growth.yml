@@ -13,8 +13,9 @@ jobs:
       - uses: ./.github/actions/setup-rust
       - name: Build roundhouse (main) and emit
         run: |
-          git clone -q https://github.com/roundhouse-rb/roundhouse rh && git -C rh log -1 --oneline
+          git clone -q https://github.com/dai199/roundhouse rh && git -C rh checkout -q empty-routes && git -C rh log -1 --oneline
           (cd rh && cargo build --release --bin roundhouse)
+          (cd rh && cargo test --release --test app_without_root_route 2>&1 | tail -8)
           mkdir -p out logs
           for a in empty bare; do rh/target/release/roundhouse --target spinel split-fixtures/$a -o out/$a > logs/emit-$a.log 2>&1; tail -2 logs/emit-$a.log; done
       - name: Spinel master
