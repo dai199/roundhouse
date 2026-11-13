@@ -3494,7 +3494,8 @@ fn target_files_inner(
         without_inherited_replay = trimmed;
         &without_inherited_replay
     } else { app };
-    if !matches!(target, BuildTarget::Ruby | BuildTarget::Jruby) {
+    // Not Spinel's tree either: Spinel compiles a class body's `if` around `def`s as Ruby loads it.
+    if !matches!(target, BuildTarget::Ruby | BuildTarget::Jruby | BuildTarget::Spinel) {
         refuse_conditional_definitions(app, target);
     }
     let without_auto_sources;
@@ -6195,7 +6196,7 @@ fn apply_file_programs(files: &mut Vec<(String, String)>, app: &App) {
 }
 
 /// A class-body load-time conditional (`dialect::ConditionalDefinitions`)
-/// is written as the source has it only by the Ruby family; another
+/// is written as the source has it by the Ruby family and Spinel; another
 /// target would define every branch's methods, the last one winning, so
 /// each such statement is an error there.
 fn refuse_conditional_definitions(app: &App, target: BuildTarget) {

@@ -76,6 +76,8 @@ mod addressable;
 mod view_component_gem;
 #[path = "spinel_toolchain/view_component.rs"]
 mod view_component;
+#[path = "spinel_toolchain/conditional_definitions.rs"]
+mod conditional_definitions;
 #[path = "support/class_attribute.rs"]
 mod class_attribute;
 #[path = "support/class_configuration.rs"]
