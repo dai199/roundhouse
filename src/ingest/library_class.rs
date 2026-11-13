@@ -4587,8 +4587,6 @@ pub(crate) fn synth_mattr_reader(owner: &ClassId, name: &Symbol, receiver: Metho
     }
 }
 
-/// `def <name>; Owner.<name>; end` and `def <name>=(value); Owner.<name> = value; end`: Rails' instance-level copies
-/// of a mattr/cattr, which read and write the declaring module's value.
 /// Whether a `mattr_*` keeps its instance reader and writer: Rails leaves them out for `instance_accessor: false`, and
 /// each for its own `instance_reader: false` / `instance_writer: false`.
 fn mattr_instance_options(call: &ruby_prism::CallNode<'_>) -> (bool, bool) {
@@ -4611,6 +4609,8 @@ fn mattr_instance_options(call: &ruby_prism::CallNode<'_>) -> (bool, bool) {
     (reader, writer)
 }
 
+/// `def <name>; Owner.<name>; end` and `def <name>=(value); Owner.<name> = value; end`: Rails' instance-level copies
+/// of a mattr/cattr, which read and write the declaring module's value.
 pub(crate) fn synth_mattr_instance_accessor(owner: &ClassId, name: &Symbol, writer: bool) -> MethodDef {
     let mut reader = synth_mattr_reader(owner, name, MethodReceiver::Instance);
     let module = Expr::new(Span::synthetic(), ExprNode::Const { path: owner.0.as_str().split("::").map(Symbol::from).collect() });

@@ -53,7 +53,12 @@ pub fn apply(app: &mut App) -> bool {
                 Span::synthetic(),
                 ExprNode::Send { recv: Some(view), method: Symbol::from("new"), args: Vec::new(), block: None, parenthesized: true },
             );
-            *e.node = ExprNode::Send { recv: Some(object), method: Symbol::from("render_in"), args: vec![view], block: block.take(), parenthesized: true };
+            let rendered = Expr::new(
+                Span::synthetic(),
+                ExprNode::Send { recv: Some(object), method: Symbol::from("render_in"), args: vec![view], block: block.take(), parenthesized: true },
+            );
+            // Not escaped again where the view writes it: Rails' `render` answers markup.
+            *e.node = ExprNode::Send { recv: None, method: Symbol::from("raw"), args: vec![rendered], block: None, parenthesized: true };
             e.ty = None;
             *changed = true;
         }

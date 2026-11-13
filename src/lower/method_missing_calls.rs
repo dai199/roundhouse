@@ -94,15 +94,31 @@ pub fn apply_method_missing_calls(app: &mut App, registry: &HashMap<ClassId, cra
         }
         false
     };
+    // The instance methods each class's subclasses define: a receiverless call in the class reaches one of them on a
+    // subclass's instance (view_component's `render_template_for` calls the `call` each component defines), which
+    // Ruby dispatches before `method_missing`.
+    let mut below: HashMap<String, crate::det::HashSet<String>> = HashMap::default();
+    for lc in app.library_classes.iter().filter(|c| !c.is_module) {
+        let names: Vec<String> = lc.methods.iter().filter(|m| m.receiver == crate::dialect::MethodReceiver::Instance).map(|m| m.name.as_str().to_string()).collect();
+        let mut current = parents.get(lc.name.0.as_str()).cloned().flatten();
+        for _ in 0..32 {
+            let Some(name) = current else { break };
+            below.entry(name.clone()).or_default().extend(names.iter().cloned());
+            current = parents.get(&name).cloned().flatten();
+        }
+    }
     for lc in &mut app.library_classes {
         let owner = lc.name.clone();
         let own_missing = answers_missing(&owner);
+        let subclasses_define = below.get(owner.0.as_str()).cloned().unwrap_or_default();
         for m in lc.methods.iter_mut().filter(|m| m.receiver == crate::dialect::MethodReceiver::Instance) {
             // Not inside `method_missing` itself, where an unanswered name is the one it was asked.
             if m.name == missing || m.name.as_str() == "respond_to_missing?" {
                 continue;
             }
-            let locals: Vec<Symbol> = m.params.iter().map(|p| p.name.clone()).collect();
+            let mut locals: Vec<Symbol> = m.params.iter().map(|p| p.name.clone()).collect();
+            // (a name a subclass defines is no miss: treated as the locals are, left as written)
+            locals.extend(subclasses_define.iter().map(|n| Symbol::from(n.as_str())));
             rewrite(&mut m.body, &owner, own_missing, &locals, true, registry, &answers_missing, &core_of, &module_answers, &private_missing);
         }
     }

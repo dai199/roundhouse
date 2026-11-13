@@ -1280,3 +1280,123 @@ pub(crate) fn method_missing_readers() -> &'static [(&'static str, &'static [(&'
         ),
     ]
 }
+
+/// Where [`view_component_templates`] writes the gem's methods it replaces.
+const VIEW_COMPONENT_HOOK: &str = "(roundhouse)/view_component.rb";
+
+/// view_component compiles a component's template when it first renders (`Compiler#compile`, through
+/// `ActionView::Template` and a `class_eval` of the template's Ruby), which no compiled tree can do. The templates are
+/// compiled here instead, each into its component's `call`, as an inline component writes it; the gem's compiler then
+/// only registers the component, and `render_template_for` calls `call`. `Base.inherited` is the gem's without the
+/// per-child `render_template_for` it `class_eval`s for a compiler that redefines it, which this one does not. A variant or another format's template
+/// (`foo_component.html+phone.erb`) is not compiled.
+pub(super) fn view_component_templates<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V) {
+    if !app.library_classes.iter().any(|c| c.name.0.as_str() == "ViewComponent::Base") {
+        return;
+    }
+    let hook = "module ViewComponent\n  class Compiler\n    def compile(raise_errors: false, force: false)\n      return if compiled? && !force\n      return if @component == ViewComponent::Base\n      @component.validate_initialization_parameters! if raise_errors\n      @component.register_default_slots\n      @component.build_i18n_backend\n      CompileCache.register(@component)\n    end\n  end\n\n  class Base\n    def render_template_for(variant = nil, format = nil)\n      call\n    end\n\n    def self.inherited(child)\n      compile\n      if defined?(Rails) && Rails.application && !(child < Rails.application.routes.url_helpers)\n        child.include Rails.application.routes.url_helpers\n      end\n      child.identifier = caller_locations(1, 10).reject { |l| l.base_label == \"inherited\" }[0].path\n      if defined?(Rails) && Rails.application\n        child.virtual_path = child.identifier.gsub(/(.*#{Regexp.quote(ViewComponent::Base.config.view_component_path)})|(\\.rb)/, \"\")\n      end\n      child.with_collection_parameter provided_collection_parameter\n      super\n    end\n  end\nend\n";
+    if let Ok(replacements) = super::library_class::ingest_library_classes(hook.as_bytes(), VIEW_COMPONENT_HOOK) {
+        for replacement in replacements {
+            // Every part of the class drops the gem's own definition (a reopening holds one too), and the first takes
+            // the hook's.
+            let mut first = true;
+            for lc in app.library_classes.iter_mut().filter(|c| c.name == replacement.name) {
+                for method in &replacement.methods {
+                    lc.methods.retain(|m| !(m.name == method.name && m.receiver == method.receiver));
+                    if first {
+                        let mut method = method.clone();
+                        synthetic_constants(&mut method.body);
+                        lc.methods.push(method);
+                    }
+                }
+                first = false;
+            }
+        }
+    }
+    let files: Vec<(String, Vec<crate::ident::ClassId>)> = app.library_class_files.iter().filter(|(path, _)| path.contains("/app/components/")).cloned().collect();
+    for (path, names) in files {
+        let Some(stem) = path.strip_suffix(".rb") else { continue };
+        let name = stem.rsplit_once('/').map_or(stem, |(_, n)| n);
+        let template = [format!("{stem}.html.erb"), format!("{stem}/{name}.html.erb")]
+            .into_iter()
+            .find(|t| vfs.exists(std::path::Path::new(t)));
+        let Some(template) = template else { continue };
+        let Ok(source) = vfs.read_to_string(std::path::Path::new(&template)) else { continue };
+        for class in &names {
+            if !renders_as_component(app, class) {
+                continue;
+            }
+            let Some(lc) = app.library_classes.iter_mut().find(|c| &c.name == class) else { continue };
+            if lc.methods.iter().any(|m| m.name.as_str() == "call" && m.receiver == crate::dialect::MethodReceiver::Instance) {
+                continue;
+            }
+            super::sources::register(&template, &source);
+            let (compiled, map) = crate::erb::compile_erb_mapped(&source);
+            let Ok(mut body) = super::expr::ingest_ruby_program(&compiled, &template) else { continue };
+            crate::erb::translate_spans(&mut body, &map);
+            escape_template_output(&mut body);
+            let mut call = super::library_class::synth_mattr_reader(class, &crate::ident::Symbol::from("call"), crate::dialect::MethodReceiver::Instance);
+            call.body = body;
+            call.kind = crate::dialect::AccessorKind::Method;
+            lc.methods.push(call);
+        }
+    }
+}
+
+/// The hook's constants read from the program's classes, not from an index of a file none was built for.
+fn synthetic_constants(e: &mut Expr) {
+    if matches!(&*e.node, ExprNode::Const { .. }) {
+        e.span = crate::span::Span::synthetic();
+    }
+    e.node.for_each_child_mut(&mut |c| synthetic_constants(c));
+}
+
+/// Whether `class` is a ViewComponent: `ViewComponent::Base` among its superclasses.
+fn renders_as_component(app: &App, class: &crate::ident::ClassId) -> bool {
+    let mut current = Some(class.clone());
+    let mut depth = 0;
+    while let Some(name) = current {
+        if name.0.as_str() == "ViewComponent::Base" {
+            return true;
+        }
+        depth += 1;
+        if depth > 32 {
+            return false;
+        }
+        current = app.library_classes.iter().find(|c| c.name == name).and_then(|c| c.parent.clone());
+    }
+    false
+}
+
+/// A compiled template's `_buf = _buf + (EXPR).to_s` as Rails' `<%= %>` writes it: escaped unless html_safe; its text
+/// as written; and the buffer, at the end, html_safe, as a template's output is.
+fn escape_template_output(body: &mut Expr) {
+    fn walk(e: &mut Expr) {
+        if let ExprNode::Assign { target: LValue::Var { name, .. }, value } = &mut *e.node
+            && name.as_str() == "_buf"
+            && let ExprNode::Send { recv: Some(buf), method, args, .. } = &mut *value.node
+            && method.as_str() == "+"
+            && matches!(&*buf.node, ExprNode::Var { name, .. } if name.as_str() == "_buf")
+            && let [arg] = args.as_mut_slice()
+            && let ExprNode::Send { recv: Some(inner), method: to_s, args: none, block: None, .. } = &*arg.node
+            && to_s.as_str() == "to_s"
+            && none.is_empty()
+        {
+            let helpers = Expr::new(crate::span::Span::synthetic(), ExprNode::Const { path: vec![crate::ident::Symbol::from("ActionView"), crate::ident::Symbol::from("ViewHelpers")] });
+            let escaped = Expr::new(
+                arg.span,
+                ExprNode::Send { recv: Some(helpers), method: crate::ident::Symbol::from("html_escape"), args: vec![inner.clone()], block: None, parenthesized: true },
+            );
+            *arg = escaped;
+        }
+        e.node.for_each_child_mut(&mut |c| walk(c));
+    }
+    walk(body);
+    if let ExprNode::Seq { exprs } = &mut *body.node
+        && let Some(last) = exprs.last_mut()
+        && matches!(&*last.node, ExprNode::Var { name, .. } if name.as_str() == "_buf")
+    {
+        let buf = last.clone();
+        *last = Expr::new(buf.span, ExprNode::Send { recv: Some(buf), method: crate::ident::Symbol::from("html_safe"), args: Vec::new(), block: None, parenthesized: false });
+    }
+}
