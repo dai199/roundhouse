@@ -307,6 +307,62 @@ fn config_hook<'pr>(node: &Node<'pr>, hook: &str) -> Option<Vec<Node<'pr>>> {
     Some(block.body().map(|b| flatten_statements(b)).unwrap_or_default())
 }
 
+/// Whether a condition is true whatever runs: literals compared, and `||` with such a side.
+pub(super) fn folds_true(cond: &Expr) -> bool {
+    fn number(e: &Expr) -> Option<f64> {
+        match &*e.node {
+            ExprNode::Lit { value: Literal::Int { value } } => Some(*value as f64),
+            ExprNode::Lit { value: Literal::Float { value } } => Some(*value),
+            ExprNode::Send { recv: Some(r), method, args, block: None, .. } if method.as_str() == "to_f" && args.is_empty() => match &*r.node {
+                ExprNode::Lit { value: Literal::Str { value } } => {
+                    let digits: String = value.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                    let digits = match digits.match_indices('.').nth(1) {
+                        Some((second, _)) => digits[..second].to_string(),
+                        None => digits,
+                    };
+                    digits.parse().ok()
+                }
+                _ => number(r),
+            },
+            _ => None,
+        }
+    }
+    match &*cond.node {
+        ExprNode::Lit { value: Literal::Bool { value } } => *value,
+        ExprNode::BoolOp { op: crate::expr::BoolOpKind::Or, left, right, .. } => folds_true(left) || folds_true(right),
+        ExprNode::Send { recv: Some(l), method, args, block: None, .. } if args.len() == 1 => {
+            let (Some(a), Some(b)) = (number(l), number(&args[0])) else { return false };
+            match method.as_str() {
+                ">=" => a >= b,
+                ">" => a > b,
+                "<=" => a <= b,
+                "<" => a < b,
+                "==" => a == b,
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// The statements of `ActiveSupport.on_load(:after_initialize) do … end`.
+fn after_initialize_load_hook<'pr>(node: &Node<'pr>) -> Option<Vec<Node<'pr>>> {
+    let call = node.as_call_node()?;
+    if constant_id_str(&call.name()) != "on_load" || constant_path_of(&call.receiver()?)? != ["ActiveSupport"] {
+        return None;
+    }
+    let args: Vec<Node<'pr>> = call.arguments()?.arguments().iter().collect();
+    let [hook] = args.as_slice() else { return None };
+    if hook.as_symbol_node().map(|s| s.unescaped().to_vec()).as_deref() != Some(b"after_initialize") {
+        return None;
+    }
+    let block = call.block()?.as_block_node()?;
+    if block.parameters().is_some() {
+        return None;
+    }
+    Some(block.body().map(|b| flatten_statements(b)).unwrap_or_default())
+}
+
 /// `[]` for `config`, `["a", "b"]` for `config.a.b`.
 fn config_chain(node: &Node<'_>) -> Option<Vec<String>> {
     let call = node.as_call_node()?;
@@ -1145,6 +1201,13 @@ fn dead_branches<V: Vfs + ?Sized>(vfs: &V, dir: &Path, libs: &[PathBuf], forward
                         (Phase::BeforeInitialize, hook, None)
                     } else if let Some(hook) = config_hook(&stmt, "after_initialize") {
                         (Phase::AfterInitialize, hook, hook_param(&stmt))
+                    } else if let Some((app, hook)) = initializer_block(&stmt)
+                        && let [only] = hook.as_slice()
+                        && let Some(inner) = after_initialize_load_hook(only)
+                    {
+                        // An initializer whose body is only `ActiveSupport.on_load(:after_initialize) do … end`: the block
+                        // runs once the app has initialized, as `config.after_initialize`'s does.
+                        (Phase::AfterInitialize, inner, app)
                     } else if let Some((app, hook)) = initializer_block(&stmt) {
                         // Not one the ledger already takes: a quiet one runs nothing, and a load hook's mixins are carried.
                         if settled.quiet.iter().any(|(f, at, _)| *f == boot.file && *at == start) {
@@ -1432,21 +1495,25 @@ impl Replayer<'_> {
         let mut out = Vec::new();
         for (at, node) in nodes.iter().enumerate() {
             let expr = super::expr::ingest_expr(node, &self.file).ok()?;
+            let Some(expr) = self.statement(expr)? else { continue };
             // An initializer block's `next if cond` leaves the block: the statements after it run only when `cond` is
             // false. Not replayed as written, where a top-level `next` is no Ruby.
             if let ExprNode::If { cond, then_branch, else_branch } = &*expr.node
                 && matches!(&*then_branch.node, ExprNode::Next { value: None })
                 && matches!(&*else_branch.node, ExprNode::Lit { value: crate::expr::Literal::Nil })
             {
+                // Not kept when the condition is already settled true (`Rails.version.to_f >= 6.1`, read as the
+                // runtime's version): nothing after it ever runs.
+                if folds_true(cond) {
+                    return Some(out);
+                }
                 let rest = self.block(&nodes[at + 1..])?;
                 let rest = Expr::new(expr.span, ExprNode::Seq { exprs: rest });
                 let nil = Expr::new(expr.span, ExprNode::Lit { value: crate::expr::Literal::Nil });
                 out.push(Expr::new(expr.span, ExprNode::If { cond: cond.clone(), then_branch: nil, else_branch: rest }));
                 return Some(out);
             }
-            if let Some(expr) = self.statement(expr)? {
-                out.push(expr);
-            }
+            out.push(expr);
         }
         Some(out)
     }

@@ -41,12 +41,6 @@ module Rails
     attr_accessor :secret_key_base
   end
 
-  # The Rails this runtime follows (8.1's behavior throughout): a gem's own version checks (view_component's
-  # `Rails.version.to_f >= 6.1`) read it.
-  def self.version
-    "8.1.4"
-  end
-
   # Rails-faithful: the parked RAILS_ENV wins, development is the
   # default when unset (serving/bench harnesses pass
   # RAILS_ENV=production; lobsters gates dev-only filters on
@@ -530,6 +524,11 @@ module Rails
       "_session"
     end
 
+    # Rails' default with no `config.eager_load`; the app's environments override it on the reopen.
+    def eager_load
+      false
+    end
+
     def propshaft_asset_path(source)
       "/assets/#{source}"
     end
@@ -906,6 +905,11 @@ module Rails
 
     def relative_url_root
       ENV["RAILS_RELATIVE_URL_ROOT"]
+    end
+
+    # `config.eager_load`, per environment from config/environments (`ingest::action_controller_caching_config`).
+    def eager_load
+      Rails.application.eager_load
     end
 
     def action_controller
