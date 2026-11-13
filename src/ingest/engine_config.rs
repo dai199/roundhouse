@@ -252,7 +252,7 @@ pub(super) fn carry(app: &mut App, dir: &Path) -> super::boot_program::Taken {
     let replays = STATE.with(|s| s.borrow().replays.clone());
     let phase = |p: Phase| replays.iter().filter(move |r| r.phase == p).flat_map(|r| r.statements.clone());
     let mut before: Vec<Expr> = phase(Phase::BeforeInitialize).chain(phase(Phase::Initializer)).collect();
-    before.retain(|statement| !carry_boot_mixin(app, statement));
+    before.retain(|statement| !carry_boot_mixin(app, statement) && !extends_the_route_dsl(app, statement));
     let after: Vec<Expr> = phase(Phase::AfterInitialize).collect();
     statements.extend(before);
     app.boot_program.splice(0..0, statements);
@@ -1670,6 +1670,33 @@ fn is_app_module_name(expr: &Expr, app: &str) -> bool {
         }
     }
     names == ["name", "module_parent", "class"]
+}
+
+/// `Doorkeeper::Rails::Routes.install!`, a gem class method that mixes its helpers into Rails' route DSL
+/// (`ActionDispatch::Routing::Mapper.include Doorkeeper::Rails::Routes::Helper`): the route table drew those helpers'
+/// routes at transpile time (`gem_routes`), so there is nothing left for it to do at boot.
+fn extends_the_route_dsl(app: &App, statement: &Expr) -> bool {
+    let ExprNode::Send { recv: Some(recv), method, args, block: None, .. } = &*statement.node else { return false };
+    let ExprNode::Const { path } = &*recv.node else { return false };
+    if !args.is_empty() {
+        return false;
+    }
+    let owner = path.iter().map(|s| s.as_str()).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("::");
+    let mapper = |e: &Expr| {
+        matches!(&*e.node, ExprNode::Const { path } if path.iter().map(|s| s.as_str()).filter(|s| !s.is_empty()).eq(["ActionDispatch", "Routing", "Mapper"]))
+    };
+    fn mixes_into(e: &Expr, mapper: &dyn Fn(&Expr) -> bool) -> bool {
+        let here = matches!(&*e.node, ExprNode::Send { recv: Some(r), method, .. }
+            if mapper(r) && matches!(method.as_str(), "include" | "send" | "__send__" | "prepend"));
+        let mut found = here;
+        e.node.for_each_child(&mut |c| found |= mixes_into(c, mapper));
+        found
+    }
+    app.library_classes
+        .iter()
+        .filter(|c| c.name.0.as_str() == owner)
+        .flat_map(|c| c.methods.iter())
+        .any(|m| m.receiver == crate::dialect::MethodReceiver::Class && m.name == *method && mixes_into(&m.body, &mapper))
 }
 
 /// `initializer "name" do |app| … end`: the block's app parameter and statements.

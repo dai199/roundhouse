@@ -3908,6 +3908,21 @@ fn walk_decl_body_with_visibility<'pr>(
                                     out.methods.push(method);
                                 }
                             }
+                            // Rails' instance copies, which a module's includer or extender calls (Doorkeeper's
+                            // `extend Registry` then `register`, which reads `flows`): the owner's value.
+                            if is_class_attr && !mode.is_class_side() {
+                                for (wanted, writer) in [(want_reader, false), (want_writer, true)] {
+                                    if !wanted {
+                                        continue;
+                                    }
+                                    let mut method = synth_mattr_instance_accessor(owner, name, writer);
+                                    method.name_span = name_span;
+                                    visibility.apply(&statement, &mut method);
+                                    if !out.methods.iter().any(|e| e.name == method.name && e.receiver == method.receiver) {
+                                        out.methods.push(method);
+                                    }
+                                }
+                            }
                         }
                     }
                     // `alias_method :eql?, :==` copies the method as it
@@ -4566,6 +4581,26 @@ pub(crate) fn synth_mattr_reader(owner: &ClassId, name: &Symbol, receiver: Metho
         mutates_self: false,
         block_param: None,
     }
+}
+
+/// `def <name>; Owner.<name>; end` and `def <name>=(value); Owner.<name> = value; end`: Rails' instance-level copies
+/// of a mattr/cattr, which read and write the declaring module's value.
+pub(crate) fn synth_mattr_instance_accessor(owner: &ClassId, name: &Symbol, writer: bool) -> MethodDef {
+    let mut reader = synth_mattr_reader(owner, name, MethodReceiver::Instance);
+    let module = Expr::new(Span::synthetic(), ExprNode::Const { path: owner.0.as_str().split("::").map(Symbol::from).collect() });
+    if writer {
+        let value_param = Symbol::from("value");
+        reader.name = Symbol::from(format!("{}=", name.as_str()));
+        reader.params = synth_mattr_writer(owner, name, MethodReceiver::Instance).params;
+        let value = Expr::new(Span::synthetic(), ExprNode::Var { id: VarId(0), name: value_param });
+        reader.body = Expr::new(Span::synthetic(), ExprNode::Send { recv: Some(module), method: Symbol::from(format!("{}=", name.as_str())), args: vec![value], block: None, parenthesized: true });
+    } else {
+        reader.body = Expr::new(Span::synthetic(), ExprNode::Send { recv: Some(module), method: name.clone(), args: vec![], block: None, parenthesized: false });
+    }
+    // Not an attribute accessor: it reads the module's value, not an instance variable of its own (Doorkeeper's
+    // `mapping[name] = @mapping[name]`, where `@mapping` is another object).
+    reader.kind = crate::dialect::AccessorKind::Method;
+    reader
 }
 
 /// `def self.<name>=(value); @@<name> = value; end` — Rails mattr/cattr

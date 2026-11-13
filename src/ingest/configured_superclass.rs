@@ -2021,6 +2021,11 @@ impl<'a> Eval<'a> {
                 };
                 match &*body.node {
                     ExprNode::Ivar { name } => Some(Slot::Ivar(holder, name.as_str().to_string())),
+                    // A mattr's instance copy (`def mapping = Routes.mapping`): the module's value it reads.
+                    ExprNode::Send { recv: Some(owner), args, block: None, .. } if args.is_empty() && matches!(&*owner.node, ExprNode::Const { .. }) => {
+                        let body = body.clone();
+                        self.held_by(&body, frame)
+                    }
                     _ => None,
                 }
             }
