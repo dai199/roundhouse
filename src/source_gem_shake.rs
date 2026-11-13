@@ -1483,8 +1483,14 @@ fn scan(e: &Expr, s: &mut Scan<'_>) {
                         s.pass(value.as_str(), Some(&args[1..]));
                     }
                 }
-                // Not dropped as unknown: svg-graph's `init_with` reaches its option writers by `send(key.to_s + "=", value)`.
-                Some(_) if by_name && matches!(method.as_str(), "send" | "public_send" | "__send__") => {
+                // Not dropped as unknown: svg-graph's `init_with` reaches its option writers by `send(key.to_s + "=", value)`,
+                // and Doorkeeper's `Credentials.from_request` its readers by `self.method(method)` over a configured list.
+                // Not a `method` read outside a gem method: Hashie's `method(method_key)` is also scanned with no context, where
+                // it would reach every method of the app's mixins (Devise's class accessors on User, which nothing types).
+                Some(_) if by_name
+                    && (matches!(method.as_str(), "send" | "public_send" | "__send__")
+                        || (s.context.is_some() && matches!(method.as_str(), "method" | "public_method"))) =>
+                {
                     let own = s.context.is_none() && recv.as_ref().is_none_or(|r| matches!(&*r.node, ExprNode::SelfRef));
                     s.send_by(if own { &Target::AppSelf } else { &target }, &args[0], &args[1..]);
                 }

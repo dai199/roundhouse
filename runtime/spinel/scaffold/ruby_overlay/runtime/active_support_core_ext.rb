@@ -495,3 +495,103 @@ class Array
     end
   end
 end
+
+# ActiveSupport's `HashWithIndifferentAccess`: String keys, read and written by a Symbol as well, nested Hashes
+# converted, for a gem's code on untyped values (Doorkeeper's `request.parameters.values_at(:client_id, …)`).
+unless defined?(ActiveSupport::HashWithIndifferentAccess)
+  module ActiveSupport
+    class HashWithIndifferentAccess < Hash
+      def initialize(constructor = nil)
+        super()
+        update(constructor) if constructor.respond_to?(:to_hash)
+      end
+
+      def self.[](*args)
+        new.merge!(Hash[*args])
+      end
+
+      def []=(key, value)
+        super(convert_key(key), convert_value(value))
+      end
+      alias store []=
+
+      def [](key)
+        super(convert_key(key))
+      end
+
+      def fetch(key, *extras, &block)
+        super(convert_key(key), *extras, &block)
+      end
+
+      def dig(key, *rest)
+        super(convert_key(key), *rest)
+      end
+
+      def key?(key)
+        super(convert_key(key))
+      end
+      alias include? key?
+      alias has_key? key?
+      alias member? key?
+
+      def values_at(*keys)
+        keys.map { |key| self[key] }
+      end
+
+      def delete(key)
+        super(convert_key(key))
+      end
+
+      def update(*others)
+        others.each { |other| other.to_hash.each_pair { |key, value| self[key] = value } }
+        self
+      end
+      alias merge! update
+
+      def merge(*others)
+        dup.update(*others)
+      end
+
+      def slice(*keys)
+        self.class.new(super(*keys.map { |key| convert_key(key) }))
+      end
+
+      def except(*keys)
+        self.class.new(super(*keys.map { |key| convert_key(key) }))
+      end
+
+      def dup
+        self.class.new(self)
+      end
+
+      def with_indifferent_access
+        dup
+      end
+
+      def to_hash
+        each_with_object({}) { |(key, value), out| out[key] = value.is_a?(HashWithIndifferentAccess) ? value.to_hash : value }
+      end
+
+      private
+
+      def convert_key(key)
+        key.is_a?(Symbol) ? key.name : key
+      end
+
+      def convert_value(value)
+        case value
+        when HashWithIndifferentAccess then value
+        when Hash then self.class.new(value)
+        when Array then value.map { |item| convert_value(item) }
+        else value
+        end
+      end
+    end
+  end
+
+  class Hash
+    def with_indifferent_access
+      ActiveSupport::HashWithIndifferentAccess.new(self)
+    end
+  end
+end

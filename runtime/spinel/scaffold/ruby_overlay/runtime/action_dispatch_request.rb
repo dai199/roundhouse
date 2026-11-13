@@ -385,6 +385,11 @@ module ActionDispatch
       !@env["HTTP_X_INERTIA"].to_s.empty?
     end
 
+    # Rails' `parameters`: every param the request carries, by a String or a Symbol.
+    def parameters
+      @params.with_indifferent_access
+    end
+
     # Query-string params only (Rails' GET-vs-POST split); lobsters'
     # search/time-series pages rebuild URLs from these.
     def query_parameters
