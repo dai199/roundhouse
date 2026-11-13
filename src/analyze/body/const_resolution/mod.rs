@@ -6,6 +6,7 @@
 
 use crate::ingest::prism_api::PrismLocation;
 mod hoist;
+mod load_order;
 
 use std::collections::hash_map::Entry;
 use crate::det::{HashMap, HashSet};
@@ -322,6 +323,9 @@ struct FileAnswers {
     sole_namespaces: HashSet<Box<str>>,
     singleton_methods: HashMap<Box<str>, HashSet<Box<str>>>,
     singleton_owners: HashSet<Box<str>>,
+    /// References read while the file loads that an enclosing namespace's constant, defined only later, does not
+    /// shadow yet: the typer writes them from the top level, as the emitted tree may define that namespace first.
+    rooted: HashSet<u32>,
 }
 
 /// The identity map's hasher is not `Clone`, so its entries are copied.
@@ -343,6 +347,7 @@ impl Clone for FileAnswers {
             sole_namespaces: self.sole_namespaces.clone(),
             singleton_methods: self.singleton_methods.clone(),
             singleton_owners: self.singleton_owners.clone(),
+            rooted: self.rooted.clone(),
         }
     }
 }
@@ -696,7 +701,8 @@ impl ConstResolver {
             if !ancestors.contains(&own) { ancestors.insert(0, own.clone()); }
             Some((own, ancestors))
         }).collect();
-        let files = crate::timings::phase("rubydex: answers", || collect_answers(&graph, sources));
+        let order = load_order::LoadOrder::of(sources);
+        let files = crate::timings::phase("rubydex: answers", || collect_answers(&graph, sources, &order));
         drop(graph);
         let mut declared: Vec<&str> = files.iter().flatten().flat_map(|file| file.class_definitions.iter().map(|name| name.as_ref())).collect();
         declared.sort_unstable();
@@ -778,6 +784,12 @@ impl ConstResolver {
 
     /// App and runtime sources define this reference; RBI declarations do
     /// not enter this graph and cannot establish source ownership.
+    /// [`FileAnswers::rooted`].
+    pub(super) fn rooted(&self, span: Span, path: &[Symbol]) -> bool {
+        let Some(length) = path.last().and_then(|last| u32::try_from(last.as_str().len()).ok()) else { return false };
+        span.end.checked_sub(length).is_some_and(|start| self.file(span.file).is_some_and(|file| file.rooted.contains(&start)))
+    }
+
     pub(crate) fn has_definition(&self, span: Span, path: &[Symbol]) -> bool {
         self.reference(span, path).is_some_and(|resolved| resolved.is_some())
     }
@@ -1013,7 +1025,7 @@ fn index_sources(sources: &[SourceFile]) -> Graph {
 /// leaves memory before the inference fixpoint starts. The answers for
 /// each file are independent, so workers collect them in parallel.
 #[cfg(not(target_arch = "wasm32"))]
-fn collect_answers(graph: &Graph, sources: &[SourceFile]) -> Vec<Option<FileAnswers>> {
+fn collect_answers(graph: &Graph, sources: &[SourceFile], order: &load_order::LoadOrder) -> Vec<Option<FileAnswers>> {
     let workers = std::thread::available_parallelism()
         .map_or(1, std::num::NonZeroUsize::get)
         .min(MAX_WORKERS);
@@ -1021,7 +1033,7 @@ fn collect_answers(graph: &Graph, sources: &[SourceFile]) -> Vec<Option<FileAnsw
     std::thread::scope(|scope| {
         let chunks: Vec<_> = sources
             .chunks(chunk)
-            .map(|chunk| scope.spawn(move || answer_files(graph, chunk)))
+            .map(|chunk| scope.spawn(move || answer_files(graph, chunk, order)))
             .collect();
         chunks
             .into_iter()
@@ -1036,15 +1048,15 @@ fn collect_answers(graph: &Graph, sources: &[SourceFile]) -> Vec<Option<FileAnsw
 
 /// The browser build has no threads.
 #[cfg(target_arch = "wasm32")]
-fn collect_answers(graph: &Graph, sources: &[SourceFile]) -> Vec<Option<FileAnswers>> {
-    answer_files(graph, sources)
+fn collect_answers(graph: &Graph, sources: &[SourceFile], order: &load_order::LoadOrder) -> Vec<Option<FileAnswers>> {
+    answer_files(graph, sources, order)
 }
 
-fn answer_files(graph: &Graph, sources: &[SourceFile]) -> Vec<Option<FileAnswers>> {
+fn answer_files(graph: &Graph, sources: &[SourceFile], order: &load_order::LoadOrder) -> Vec<Option<FileAnswers>> {
     let mut class_cache = IdentityHashMap::default();
     sources
         .iter()
-        .map(|source| is_indexed(source).then(|| answer_file(graph, source, &mut class_cache)))
+        .map(|source| is_indexed(source).then(|| answer_file(graph, source, order, &mut class_cache)))
         .collect()
 }
 
@@ -1109,9 +1121,40 @@ fn multi_write_values(text: &str) -> HashMap<u32, u32> {
     values.0
 }
 
+/// What a reference evaluated while the file loads names: Ruby's lexical lookup sees only what is defined by then, so
+/// a namespace this same file defines further down (`module Probe; class Config; FORCE = Rails.env…; end; module
+/// Rails; end; end`) does not shadow the outer name yet, and the reference is the next enclosing one's.
+fn defined_by_then<'g>(graph: &'g Graph, order: &load_order::LoadOrder, path: &str, at: u32, id: DeclarationId, declaration: &'g Declaration) -> (DeclarationId, &'g Declaration) {
+    let later = |declaration: &Declaration| {
+        !declaration.definitions().is_empty()
+            && declaration.definitions().iter().all(|definition| {
+                graph.definitions().get(definition).is_some_and(|definition| {
+                    graph.documents().get(definition.uri_id()).is_some_and(|document| order.later(document.uri(), definition.offset().start(), path, at))
+                })
+            })
+    };
+    if !later(declaration) {
+        return (id, declaration);
+    }
+    let name = hoisted_name(declaration.name());
+    let parts: Vec<&str> = name.split("::").collect();
+    let Some((last, scopes)) = parts.split_last() else { return (id, declaration) };
+    for depth in (0..scopes.len()).rev() {
+        let candidate = scopes[..depth].iter().copied().chain(std::iter::once(*last)).collect::<Vec<_>>().join("::");
+        let candidate_id = rubydex::model::ids::declaration_id_from_lookup_name(&candidate);
+        if let Some(outer) = graph.declarations().get(&candidate_id)
+            && !later(outer)
+        {
+            return (candidate_id, outer);
+        }
+    }
+    (id, declaration)
+}
+
 fn answer_file(
     graph: &Graph,
     source: &SourceFile,
+    order: &load_order::LoadOrder,
     class_cache: &mut IdentityHashMap<DeclarationId, (Arc<ClassId>, bool)>,
 ) -> FileAnswers {
     let mut answers = FileAnswers::default();
@@ -1130,6 +1173,14 @@ fn answer_file(
     };
     // Positions a whole-path reference filled, which an exact one replaces.
     let mut path_keys = HashSet::default();
+    let method_bodies: Vec<(u32, u32)> = document
+        .definitions()
+        .iter()
+        .filter_map(|id| match graph.definitions().get(id) {
+            Some(Definition::Method(method)) => Some((method.offset().start(), method.offset().end())),
+            _ => None,
+        })
+        .collect();
     for reference_id in document.constant_references() {
         let Some(reference) = graph.constant_references().get(reference_id) else {
             continue;
@@ -1170,9 +1221,20 @@ fn answer_file(
         {
             answers.namespace_definitions.insert(hoisted_name(target.name()).into());
         }
+        let load_time = !method_bodies.iter().any(|(start, end)| *start <= offset.start() && offset.start() < *end);
         let target = graph
             .name_id_to_declaration_id(*reference.name_id())
             .and_then(|id| graph.declarations().get(id).map(|decl| (*id, decl)))
+            .map(|(id, declaration)| {
+                if !load_time {
+                    return (id, declaration);
+                }
+                let (outer, outer_declaration) = defined_by_then(graph, order, &source.path, offset.start(), id, declaration);
+                if outer != id {
+                    answers.rooted.insert(key);
+                }
+                (outer, outer_declaration)
+            })
             // An app's own alias of a class or module in a file of
             // constants alone (`RemoteThing = Thing`, which the autoloader
             // maps by name): Ruby binds the name to the very class, so
