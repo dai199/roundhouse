@@ -6297,7 +6297,7 @@ fn gem_declaration_order(app: &App) -> Vec<String> {
 }
 
 /// Every item of a program, those in its branches too.
-fn all_program_items(items: &[crate::app::ProgramItem]) -> Vec<&crate::app::ProgramItem> {
+pub(crate) fn all_program_items(items: &[crate::app::ProgramItem]) -> Vec<&crate::app::ProgramItem> {
     let mut out = Vec::new();
     for item in items {
         if let crate::app::ProgramItem::Branch { then_items, else_items, .. } = item {

@@ -4286,9 +4286,12 @@ fn library_mattr_claim(
                             }
                         }
                         Some("default") => unmodeled = true,
-                        // `instance_reader:` / friends are ignored when no
-                        // default is claimed; mixed with `default:` they
-                        // would silently drop half the declaration.
+                        // Not another option: these only leave the instance copies out, which
+                        // `mattr_instance_options` reads (view_component's `mattr_accessor :cache, instance_reader:
+                        // false, instance_accessor: false do Set.new end`).
+                        Some("instance_reader" | "instance_writer" | "instance_accessor") if assoc.value().as_false_node().is_some() => {}
+                        // Other options are ignored when no default is claimed; mixed with `default:` they would
+                        // silently drop half the declaration.
                         _ => other_kwargs = true,
                     }
                 }

@@ -1430,8 +1430,20 @@ struct Replayer<'a> {
 impl Replayer<'_> {
     fn block(&self, nodes: &[Node<'_>]) -> Option<Vec<Expr>> {
         let mut out = Vec::new();
-        for node in nodes {
+        for (at, node) in nodes.iter().enumerate() {
             let expr = super::expr::ingest_expr(node, &self.file).ok()?;
+            // An initializer block's `next if cond` leaves the block: the statements after it run only when `cond` is
+            // false. Not replayed as written, where a top-level `next` is no Ruby.
+            if let ExprNode::If { cond, then_branch, else_branch } = &*expr.node
+                && matches!(&*then_branch.node, ExprNode::Next { value: None })
+                && matches!(&*else_branch.node, ExprNode::Lit { value: crate::expr::Literal::Nil })
+            {
+                let rest = self.block(&nodes[at + 1..])?;
+                let rest = Expr::new(expr.span, ExprNode::Seq { exprs: rest });
+                let nil = Expr::new(expr.span, ExprNode::Lit { value: crate::expr::Literal::Nil });
+                out.push(Expr::new(expr.span, ExprNode::If { cond: cond.clone(), then_branch: nil, else_branch: rest }));
+                return Some(out);
+            }
             if let Some(expr) = self.statement(expr)? {
                 out.push(expr);
             }

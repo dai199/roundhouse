@@ -1975,7 +1975,19 @@ pub(crate) fn compiled_on_the_ruby_family(app: &App) -> crate::det::HashSet<Stri
         }
         false
     };
-    let mut kept: crate::det::HashSet<String> = app.auto_source_gems.iter().filter(|g| needs_railties(g)).cloned().collect();
+    // Nor its gemspec alone: a gem may require a framework it does not declare (view_component's `require "action_view"`,
+    // with only activesupport in its dependencies), and the real gem would load the real framework too.
+    let requires_the_framework = |gem: &str| {
+        let Some(version) = lock.version_of(gem) else { return false };
+        app.file_programs.iter().filter(|p| crate::ingest::source_gems::file_of(&p.source, gem, version)).any(|p| {
+            crate::project::all_program_items(&p.items).into_iter().any(|item| {
+                matches!(item, crate::app::ProgramItem::Require { feature, relative: false, .. }
+                    if matches!(feature.split('/').next(), Some("rails" | "action_view" | "action_controller" | "action_dispatch" | "active_model" | "active_record" | "action_mailer" | "active_job")))
+            })
+        })
+    };
+    let mut kept: crate::det::HashSet<String> =
+        app.auto_source_gems.iter().filter(|g| needs_railties(g) || requires_the_framework(g)).cloned().collect();
     loop {
         let more: Vec<String> = app
             .auto_source_gems

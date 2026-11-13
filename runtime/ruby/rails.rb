@@ -41,6 +41,12 @@ module Rails
     attr_accessor :secret_key_base
   end
 
+  # The Rails this runtime follows (8.1's behavior throughout): a gem's own version checks (view_component's
+  # `Rails.version.to_f >= 6.1`) read it.
+  def self.version
+    "8.1.4"
+  end
+
   # Rails-faithful: the parked RAILS_ENV wins, development is the
   # default when unset (serving/bench harnesses pass
   # RAILS_ENV=production; lobsters gates dev-only filters on
