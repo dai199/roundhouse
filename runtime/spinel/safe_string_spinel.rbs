@@ -1,0 +1,11 @@
+class SafeString < String
+  def html_safe?: () -> bool
+  def html_safe: () -> SafeString
+  def to_s: () -> SafeString
+  def +: (untyped other) -> SafeString
+end
+
+class String
+  def html_safe: () -> SafeString
+  def html_safe?: () -> bool
+end

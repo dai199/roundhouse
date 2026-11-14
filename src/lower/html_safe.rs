@@ -156,10 +156,15 @@ fn from_source_gem(sources: &[crate::span::SourceFile], m: &crate::dialect::Meth
         .is_some_and(|f| crate::ingest::absence_guards::is_source_gem_path(&f.path))
 }
 
-/// Every other target has no safe String: a source gem's marks are erased there, as the app's are.
+/// Every other target has no safe String (Spinel has one only where components render): a source gem's marks are
+/// erased there, as the app's are.
 pub fn lower_for_target(app: &App, target: crate::build_target::BuildTarget) -> Option<App> {
     use crate::build_target::BuildTarget;
     if matches!(target, BuildTarget::Ruby | BuildTarget::Jruby) {
+        return None;
+    }
+    // Not erased on Spinel where components render: its tree ships a safe String then (`runtime/spinel/safe_string_spinel.rb`).
+    if target == BuildTarget::Spinel && !components(app).is_empty() {
         return None;
     }
     fn marks(e: &Expr) -> bool {

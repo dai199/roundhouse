@@ -1942,15 +1942,27 @@ fn inject_spinel_active_support_requires(files: &mut Vec<(String, String)>) -> R
         requires.push_str("require_relative \"runtime/class_ext_spinel\"\n");
         sigs.push("class_ext_spinel");
     }
-    if requires.is_empty() {
+    // After the shared view helpers, whose `html_escape` and `raw` it reopens: a tree that renders components.
+    let safe = own(&|text| text.contains("ViewComponent::Base"));
+    if safe {
+        sigs.push("safe_string_spinel");
+    }
+    if requires.is_empty() && !safe {
         return Ok(());
     }
-    let anchor = "require_relative \"runtime/rails\"\n";
     let Some((_, boot)) = files.iter_mut().find(|(p, _)| p == "boot.rb") else {
         return Err("boot.rb missing for the ActiveSupport requires".into());
     };
-    let at = boot.find(anchor).ok_or("boot.rb missing the rails require (ActiveSupport anchor)")?;
-    boot.insert_str(at + anchor.len(), &requires);
+    if !requires.is_empty() {
+        let anchor = "require_relative \"runtime/rails\"\n";
+        let at = boot.find(anchor).ok_or("boot.rb missing the rails require (ActiveSupport anchor)")?;
+        boot.insert_str(at + anchor.len(), &requires);
+    }
+    if safe {
+        let anchor = "require_relative \"runtime/action_controller\"\n";
+        let at = boot.find(anchor).ok_or("boot.rb missing the action_controller require (safe String anchor)")?;
+        boot.insert_str(at + anchor.len(), "require_relative \"runtime/safe_string_spinel\"\n");
+    }
     for stem in sigs {
         let rbs = crate::runtime_files::read_to_string(&format!("runtime/spinel/{stem}.rbs"))?;
         files.push((format!("sig/runtime/{stem}.rbs"), rbs));
