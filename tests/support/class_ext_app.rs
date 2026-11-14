@@ -16,7 +16,7 @@ pub fn app() -> emit_and_run::Overlay {
             "app/lib/critter_report.rb",
             "class CritterReport\n  def self.lines\n    [[Dog, Puppy, Zoo::Keeper::Cat].size, Critter.descendants.map(&:name).sort, Zoo::Keeper::Cat.module_parents.map(&:name), Zoo::Keeper::Cat.module_parent.name]\n  end\nend\n",
         )
-        .write("app/lib/dog.rb", "class Dog < Critter\nend\n")
-        .write("app/lib/puppy.rb", "class Puppy < Dog\nend\n")
-        .write("app/lib/zoo/keeper/cat.rb", "module Zoo\n  module Keeper\n    class Cat < Critter\n    end\n  end\nend\n")
+        .write("app/lib/dog.rb", "class Dog < Critter\n  def sound = \"woof\"\nend\n")
+        .write("app/lib/puppy.rb", "class Puppy < Dog\n  def sound = \"yip\"\nend\n")
+        .write("app/lib/zoo/keeper/cat.rb", "module Zoo\n  module Keeper\n    class Cat < Critter\n      def sound = \"meow\"\n    end\n  end\nend\n")
 }
