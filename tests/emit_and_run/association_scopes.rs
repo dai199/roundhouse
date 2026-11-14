@@ -185,3 +185,32 @@ fn a_scope_that_takes_the_owner_is_reported_not_kept() {
         );
     }
 }
+
+/// A scope body the readers can't graft onto their query, anything but a
+/// chain of query calls (`-> { where(active: true) if flag }`), isn't
+/// applied either, and says so, rather than read the target unscoped
+/// with no word. (The body is still analyzed, so an unsupported construct
+/// in it stays an error.)
+#[test]
+fn a_scope_that_is_not_a_query_chain_is_reported() {
+    let warnings = app()
+        .edit(
+            "app/models/author.rb",
+            "  has_many :posts\n",
+            "  has_many :posts\n  has_many :maybe_posts, -> { where(title: \"t\") if true }, class_name: \"Post\"\n",
+        )
+        .edit(
+            "app/models/post.rb",
+            "  has_many :comments\n",
+            "  has_many :comments\n  belongs_to :maybe_author, -> { where(name: \"a\") if true }, class_name: \"Author\", foreign_key: :author_id, optional: true\n",
+        )
+        .ingest_warnings();
+    for declared in ["has_many :maybe_posts", "belongs_to :maybe_author"] {
+        assert!(
+            warnings.iter().any(|w| w.contains(declared) && w.contains("isn't a chain of query calls")),
+            "{declared}: {warnings:#?}"
+        );
+    }
+    // The probe's own scopes, all query chains, are kept without a word.
+    assert!(!app().ingest_warnings().iter().any(|w| w.contains("not applied")), "{:#?}", app().ingest_warnings());
+}
