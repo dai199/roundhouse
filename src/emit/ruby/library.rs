@@ -2581,11 +2581,28 @@ fn invalidate_on_fk_write(lc: &mut LibraryClass, name: &Symbol, fk: &Symbol) {
     }
 }
 
-/// `was = @<fk>; written = <write>; @<name>_loaded = @<fk> == was && @<name>_loaded; written`
+/// `was = <fk>; begin <write> ensure @<name>_loaded = <fk> == was && @<name>_loaded end`.
+///
+/// The key is read through its reader: a held column stores under
+/// `@<fk>_raw` (`read_held_columns_through_readers`), so `@<fk>` would read
+/// nil on both sides. The reset is an `ensure`, so a custom writer that
+/// returns early still drops a stale target, and the write's own answer
+/// stays the method's (`x.author_id = 3` is 3).
 fn keep_target_unless_key_changes(write: &Expr, name: &Symbol, fk: &Symbol) -> Expr {
     let span = write.span;
     let was = Symbol::from(format!("__rh_{}_was", fk.as_str()));
-    let fk_read = || Expr::new(span, ExprNode::Ivar { name: fk.clone() });
+    let fk_read = || {
+        Expr::new(
+            span,
+            ExprNode::Send {
+                recv: Some(Expr::new(span, ExprNode::SelfRef)),
+                method: fk.clone(),
+                args: vec![],
+                block: None,
+                parenthesized: false,
+            },
+        )
+    };
     let loaded = Symbol::from(format!("{}_loaded", name.as_str()));
     let remember = Expr::new(
         span,
@@ -2616,18 +2633,17 @@ fn keep_target_unless_key_changes(write: &Expr, name: &Symbol, fk: &Symbol) -> E
             ),
         },
     );
-    let mut stmts = match &*write.node {
-        ExprNode::Seq { exprs } => exprs.clone(),
-        _ => vec![write.clone()],
-    };
-    // The write's own answer stays the method's (`x.author_id = 3` is 3).
-    let result = Symbol::from("__rh_written");
-    let last = stmts.pop().unwrap_or_else(|| Expr::new(span, ExprNode::Lit { value: Literal::Nil }));
-    stmts.insert(0, remember);
-    stmts.push(Expr::new(span, ExprNode::Assign { target: LValue::Var { id: VarId(0), name: result.clone() }, value: last }));
-    stmts.push(reset);
-    stmts.push(Expr::new(span, ExprNode::Var { id: VarId(0), name: result }));
-    Expr::new(span, ExprNode::Seq { exprs: stmts })
+    let guarded = Expr::new(
+        span,
+        ExprNode::BeginRescue {
+            body: write.clone(),
+            rescues: Vec::new(),
+            else_branch: None,
+            ensure: Some(Box::new(reset)),
+            implicit: false,
+        },
+    );
+    Expr::new(span, ExprNode::Seq { exprs: vec![remember, guarded] })
 }
 
 /// Ruby-family pre-emit pass: an STI row hydrates as its SUBCLASS.
@@ -12459,19 +12475,16 @@ fn preload_methods_source(model: &crate::dialect::Model, app: &App) -> String {
         match kind {
             // A record whose target is already loaded keeps it (Rails'
             // preloader skips a loaded association); the batch loads the
-            // rest and answers both for the next level.
+            // rest and answers both for the next level, in one Array typed
+            // from `by_id.values` (Spinel can't add a separately built one).
             PreloadKind::BelongsTo { fk, target, table, key_list } => {
                 let _ = write!(
                     src,
                     r#"
 def self._preload_batch_{name}(records)
   ids = []
-  kept = []
   records.each do |r|
-    if r.{name}_loaded?
-      held = r.{name}
-      kept << held unless held.nil?
-    else
+    unless r.{name}_loaded?
       v = r.{fk}
       ids << v unless v.nil? || v == 0
     end
@@ -12483,10 +12496,16 @@ def self._preload_batch_{name}(records)
       by_id[rec.id] = rec
     end
   end
+  out = by_id.values
   records.each do |r|
-    r._preload_{name}(by_id[r.{fk}]) unless r.{name}_loaded?
+    if r.{name}_loaded?
+      held = r.{name}
+      out << held unless held.nil?
+    else
+      r._preload_{name}(by_id[r.{fk}])
+    end
   end
-  by_id.values + kept
+  out
 end
 
 def _preload_{name}(rec)
