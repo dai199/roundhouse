@@ -522,7 +522,9 @@ fn synthesized_source(
         // supplies (with `prefix: true`, `d.name` is already
         // `<prefix>_name=`); an operator takes its fixed operands.
         let listed: String = (0..d.arity).map(|i| format!("__delegate_arg{i}")).collect::<Vec<_>>().join(", ");
-        let (params, call) = if let Some(forwarder) = operator_forwarder(t, m) {
+        let (params, call) = if d.forward_all {
+            ("*__delegate_args, **__delegate_kwargs, &__delegate_block", format!("{t}.{m}(*__delegate_args, **__delegate_kwargs, &__delegate_block)"))
+        } else if let Some(forwarder) = operator_forwarder(t, m) {
             forwarder
         } else if let Some(attr) = m.strip_suffix('=') {
             ("value", format!("{t}.{attr} = value"))
