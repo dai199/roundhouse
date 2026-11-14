@@ -2718,12 +2718,17 @@ pub fn mentions_assoc_lookup(expr: &Expr, assocs: &AssocRegistry) -> bool {
                         "offset" | "limit" | "order" | "reorder" | "joins" | "left_outer_joins"
                             | "left_joins" | "includes" | "preload" | "eager_load" | "references" | "group"
                             | "having" | "merge" | "unscope"
-                    ));
+                            // Array's `load` is private (Kernel#load), so
+                            // `post.comments.load` is a NoMethodError on the
+                            // reader's Array too.
+                            | "load" | "load_async" | "from"
+                    ) && (args.is_empty() || !matches!(method.as_str(), "load" | "load_async")));
             if is_where || method.as_str().starts_with("find_by_") && block.is_none()
                 || is_relation_terminal(method.as_str(), args, block.as_ref())
                     && matches!(
                         method.as_str(),
                         "find"
+                            | "sum"
                             | "find_by"
                             | "find_by!"
                             | "find_sole_by"
@@ -3294,6 +3299,9 @@ fn is_relation_terminal(name: &str, args: &[Expr], block: Option<&Expr>) -> bool
         // relation (`room.messages.find_each(&:destroy)`), where the
         // association read alone is an Array with no `find_each`.
         "find_each" | "find_in_batches" => true,
+        // A column sum (`post.comments.sum(:votes)`); Array's `sum` takes
+        // an initial value or a block, never a column.
+        "sum" => args.len() == 1 && block.is_none() && matches!(&*args[0].node, ExprNode::Lit { value: Literal::Sym { .. } | Literal::Str { .. } }),
         _ => matches!(
             name,
             "ids" | "pluck" | "count" | "first" | "last" | "exists?" | "any?" | "empty?" | "size"
@@ -5586,6 +5594,40 @@ fn rewrite_send(expr: &mut Expr, ctx: &Ctx, locals: &mut Locals) -> Option<Class
                         );
                         return None;
                     }
+                }
+                // Rails' `extract_associated(:posts)`:
+                // `preload(:posts).collect(&:posts)`, each owner's reader
+                // answering the records the preload installed.
+                if method.as_str() == "extract_associated" && block.is_none()
+                    && let [arg] = args.as_slice()
+                    && let ExprNode::Lit { value: Literal::Sym { value: aname } } = &*arg.node
+                    && ctx.assocs.assoc_target(&mr, aname).is_some()
+                {
+                    let aname = aname.clone();
+                    let preloaded = put(span, Some(r), Symbol::from("preload"), args, None, true);
+                    let rows = put(span, Some(preloaded), Symbol::from("to_a"), vec![], None, false);
+                    let owner = Symbol::from("__rh_owner");
+                    let read = put(
+                        span,
+                        Some(syn(span, ExprNode::Var { id: crate::ident::VarId(0), name: owner.clone() })),
+                        aname,
+                        vec![],
+                        None,
+                        false,
+                    );
+                    let block = syn(
+                        span,
+                        ExprNode::Lambda {
+                            extra_params: Vec::new(),
+                            rest_param: None,
+                            params: vec![owner],
+                            block_param: None,
+                            body: read,
+                            block_style: BlockStyle::Brace,
+                        },
+                    );
+                    *expr = put(span, Some(rows), Symbol::from("map"), vec![], Some(block), false);
+                    return None;
                 }
                 if let Some(counted) = counted_terminal(&method, &args, block.as_ref()) {
                     *expr = put(span, Some(r), counted, args, block, parenthesized);
