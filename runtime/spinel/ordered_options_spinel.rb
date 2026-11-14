@@ -23,14 +23,11 @@ module ActiveSupport
       @values[key.to_sym] = value
     end
 
-    # Hash#merge!: the keys as given, as Rails' does (only `[]=` symbolizes).
+    # Hash#merge!: the keys as given, as Rails' does (only `[]=` symbolizes). Not `update` beside it: Spinel types a
+    # method by every class that defines its name, and openssl's `Digest#update` is handed a String.
     def merge!(other)
       other.each { |key, value| @values[key] = value }
       self
-    end
-
-    def update(other)
-      merge!(other)
     end
 
     def keys

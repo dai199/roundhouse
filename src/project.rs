@@ -1924,6 +1924,40 @@ fn inject_cruby_date_calendar_helpers(boot: &mut String) -> Result<(), String> {
     }
 }
 
+/// Spinel's `ActiveSupport::OrderedOptions` (runtime/ordered_options_spinel.rb) and its `Class` reopen with
+/// `descendants` / `module_parents` (runtime/class_ext_spinel.rb), required only by a tree whose own code names them:
+/// Spinel types a method by every class that defines its name, so their `update` / `fetch` / `keys` in every tree
+/// would widen the arguments other classes' methods of those names are given (openssl's `Digest#update`).
+fn inject_spinel_active_support_requires(files: &mut Vec<(String, String)>) -> Result<(), String> {
+    let own = |needle: &dyn Fn(&str) -> bool| {
+        files.iter().any(|(p, text)| p.ends_with(".rb") && !p.starts_with("runtime/") && needle(text))
+    };
+    let mut requires = String::new();
+    let mut sigs = Vec::new();
+    if own(&|text| text.contains("OrderedOptions")) {
+        requires.push_str("require_relative \"runtime/ordered_options_spinel\"\n");
+        sigs.push("ordered_options_spinel");
+    }
+    if own(&|text| [".descendants", ".module_parent", "module_parents", "module_parent_name"].iter().any(|n| text.contains(n))) {
+        requires.push_str("require_relative \"runtime/class_ext_spinel\"\n");
+        sigs.push("class_ext_spinel");
+    }
+    if requires.is_empty() {
+        return Ok(());
+    }
+    let anchor = "require_relative \"runtime/rails\"\n";
+    let Some((_, boot)) = files.iter_mut().find(|(p, _)| p == "boot.rb") else {
+        return Err("boot.rb missing for the ActiveSupport requires".into());
+    };
+    let at = boot.find(anchor).ok_or("boot.rb missing the rails require (ActiveSupport anchor)")?;
+    boot.insert_str(at + anchor.len(), &requires);
+    for stem in sigs {
+        let rbs = crate::runtime_files::read_to_string(&format!("runtime/spinel/{stem}.rbs"))?;
+        files.push((format!("sig/runtime/{stem}.rbs"), rbs));
+    }
+    Ok(())
+}
+
 /// `boot.rb` requires `runtime/array_column` after the JSON-column seam,
 /// only for an app with a stored array column (`lower::array_columns`).
 /// The ruby overlay's boot replaces Spinel's, so both trees call this.
@@ -10253,6 +10287,7 @@ fn spinel_files_with_source_markers(
     // both come through here. The ruby family calls `spinel_files`
     // directly and keeps `ConfigurationFile`.
     drop_yaml_configuration_file(&mut files);
+    inject_spinel_active_support_requires(&mut files)?;
     Ok((files, stems))
 }
 
@@ -10767,20 +10802,6 @@ fn spinel_files(app: &App, fixture: &Path, param_binds: bool) -> Result<(Vec<(St
         let rbs = crate::runtime_files::read_to_string("runtime/spinel/action_controller_head.rbs")
             .map_err(|e| format!("read runtime/spinel/action_controller_head.rbs: {e}"))?;
         files.push(("sig/runtime/action_controller_head.rbs".to_string(), rbs));
-    }
-
-    // `Class#descendants` / `module_parents` (runtime/class_ext_spinel.rb), which only spinel's boot.rb loads.
-    {
-        let rbs = crate::runtime_files::read_to_string("runtime/spinel/class_ext_spinel.rbs")
-            .map_err(|e| format!("read runtime/spinel/class_ext_spinel.rbs: {e}"))?;
-        files.push(("sig/runtime/class_ext_spinel.rbs".to_string(), rbs));
-    }
-
-    // `ActiveSupport::OrderedOptions` (runtime/ordered_options_spinel.rb), which only spinel's boot.rb loads.
-    {
-        let rbs = crate::runtime_files::read_to_string("runtime/spinel/ordered_options_spinel.rbs")
-            .map_err(|e| format!("read runtime/spinel/ordered_options_spinel.rbs: {e}"))?;
-        files.push(("sig/runtime/ordered_options_spinel.rbs".to_string(), rbs));
     }
 
     // Any flash key (Rails' FlashHash): a Ruby-family and Spinel reopen of the shared Flash.
