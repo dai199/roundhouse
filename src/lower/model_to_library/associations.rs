@@ -500,13 +500,18 @@ pub(super) fn push_association_methods(
                 let assoc_pk =
                     crate::lower::scope_chain::association_primary_key(models, target, primary_key.as_ref());
                 // A scope of hash `where`s joins the key in `find_by`, which
-                // folds to SQL on every target. Any other scope chains on
-                // the runtime Relation, which a strict target lacks: there
-                // the reader finds by the key alone, the reported gap.
+                // folds to SQL on every target, when each names its own
+                // column: a repeated one (`where(id: 1)` on the key, or
+                // `where(kind: "a").where(kind: "b")`) would be one keyword
+                // argument, where Rails applies both. Any other scope chains
+                // on the runtime Relation, which a strict target lacks:
+                // there the reader finds by the key alone, the reported gap.
                 let scope = match scope.as_ref().map(|scope| (scope, hash_where_entries(scope))) {
                     None => BelongsToScope::None,
-                    Some((_, Some(entries))) => BelongsToScope::Conditions(entries),
-                    Some((scope, None)) if runtime_relation == super::RuntimeRelation::Present => {
+                    Some((_, Some(entries))) if distinct_columns(&entries, &assoc_pk) => {
+                        BelongsToScope::Conditions(entries)
+                    }
+                    Some((scope, _)) if runtime_relation == super::RuntimeRelation::Present => {
                         BelongsToScope::Chain(scope)
                     }
                     Some(_) => {
@@ -520,9 +525,9 @@ pub(super) fn push_association_methods(
                             severity: crate::diagnostic::Diagnostic::default_severity(&kind),
                             kind,
                             message: format!(
-                                "`belongs_to :{name}`'s scope is not applied: only hash `where`s fold \
-                                 to SQL, and this target has no runtime Relation to run the rest on, \
-                                 so `{owner}#{name}` finds by the key alone",
+                                "`belongs_to :{name}`'s scope is not applied: only hash `where`s on \
+                                 distinct columns fold to SQL, and this target has no runtime Relation \
+                                 to run the rest on, so `{owner}#{name}` finds by the key alone",
                                 name = name.as_str(),
                                 owner = owner.0.as_str(),
                             ),
@@ -1816,6 +1821,16 @@ fn hash_where_entries(scope: &Expr) -> Option<Vec<(Expr, Expr)>> {
     };
     out.extend(entries.iter().cloned());
     Some(out)
+}
+
+/// No two of a hash scope's columns, nor any with the key `find_by` reads
+/// (`assoc_pk`), are the same: each stays its own keyword argument.
+fn distinct_columns(entries: &[(Expr, Expr)], assoc_pk: &Symbol) -> bool {
+    let mut seen = std::collections::BTreeSet::from([assoc_pk.as_str().to_string()]);
+    entries.iter().all(|(k, _)| match &*k.node {
+        ExprNode::Lit { value: crate::expr::Literal::Sym { value } } => seen.insert(value.as_str().to_string()),
+        _ => false,
+    })
 }
 
 fn synth_belongs_to_reader(

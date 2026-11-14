@@ -4100,18 +4100,27 @@ fn parse_association(
         // Positional lambda between name and kwargs — the association
         // scope (`has_many :x, -> { where(...) }, through: :y`).
         // Recorded as its raw body Expr; the reader synthesis grafts it
-        // onto the relation seed. Param-taking lambdas (rare
-        // owner-dependent scopes) are skipped — they need the owner
-        // threaded and no exercised corpus does this yet.
+        // onto the relation seed. A lambda that takes the owner, through a
+        // parameter of any kind (`->(owner)`, `->(owner = nil)`, `-> { it }`),
+        // is skipped, and reported: the owner isn't threaded, so its
+        // body would read an unbound name.
         if let Some(lambda) = arg.as_lambda_node() {
             if scope.is_none() {
-                let param_free = lambda
-                    .parameters()
-                    .and_then(|p| p.as_block_parameters_node().and_then(|b| b.parameters()))
-                    .map(|pn| pn.requireds().iter().next().is_none())
-                    .unwrap_or(true);
+                let param_free = match lambda.parameters() {
+                    None => true,
+                    Some(p) => p.as_block_parameters_node().is_some_and(|b| b.parameters().is_none()),
+                };
                 if param_free {
                     scope = lambda.body().and_then(|b| ingest_expr(&b, file).ok());
+                } else {
+                    let mut diagnostic = crate::diagnostic::Diagnostic::unsupported(
+                        super::util::node_span(&arg, file),
+                        None,
+                        format!("{method} :{name_str}, ->(owner) {{ ... }}"),
+                        "an association scope that takes the owner is not applied, so its reads skip the scope's conditions",
+                    );
+                    diagnostic.severity = crate::diagnostic::Severity::Warning;
+                    super::prism::push(diagnostic);
                 }
             }
             continue;

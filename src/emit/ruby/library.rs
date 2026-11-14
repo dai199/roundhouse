@@ -12350,7 +12350,10 @@ fn preload_targets(model: &crate::dialect::Model, app: &App) -> Vec<(String, Pre
                         None => continue,
                     },
                 };
-                let Some(Association::HasMany { target: thr_target, as_interface, .. }) =
+                // A scoped hop keeps the lazy reader too: it filters the
+                // through table (`through_hop_conditions`) and this batch
+                // would not.
+                let Some(Association::HasMany { target: thr_target, as_interface, scope: None, .. }) =
                     model.associations().find(|a| {
                         matches!(a, Association::HasMany { name, .. } if name == thr_name)
                     })
