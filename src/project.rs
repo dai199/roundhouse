@@ -3484,6 +3484,10 @@ fn target_files_lent(
 /// through its Gemfile and require (`ingest::auto_source_gems`): its
 /// compiled classes leave this tree, and the gem reads as the unknown
 /// boundary the Gemfile wiring declares.
+fn is_ruby2_keywords_call(call: &crate::expr::Expr) -> bool {
+    matches!(&*call.node, crate::expr::ExprNode::Send { recv: None, method, .. } if method.as_str() == "ruby2_keywords")
+}
+
 fn without_auto_source_gems(app: &App, target: BuildTarget) -> Option<App> {
     if app.auto_source_gems.is_empty() || !matches!(target, BuildTarget::Ruby | BuildTarget::Jruby) {
         return None;
@@ -3584,6 +3588,21 @@ fn target_files_inner(
             &shaken_gems
         }
         None => app,
+    };
+    // Not replayed on Spinel: it defines no `ruby2_keywords`, where the source's
+    // `ruby2_keywords(:m) if respond_to?(:ruby2_keywords, true)` skips it, and its keywords are passed as written.
+    let without_ruby2_keywords;
+    let app = if target == BuildTarget::Spinel
+        && app.library_classes.iter().any(|lc| lc.unknown_calls.iter().any(is_ruby2_keywords_call))
+    {
+        let mut trimmed = app.clone();
+        for lc in &mut trimmed.library_classes {
+            lc.unknown_calls.retain(|call| !is_ruby2_keywords_call(call));
+        }
+        without_ruby2_keywords = trimmed;
+        &without_ruby2_keywords
+    } else {
+        app
     };
     let without_health;
     let app = match without_rails_health_controller(app, target) {
