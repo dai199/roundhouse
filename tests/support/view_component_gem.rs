@@ -53,18 +53,17 @@ raise "card:\n#{io}" unless io.include?(card)
 puts "view_component passed"
 "#;
 
-/// The components on an app of nothing else, for the native build (the whole blog took past a CI shard's deadline),
-/// rendered straight from the script: the card's block is Ruby's, which the gem captures as Rails does.
+/// The components on the blog, rendered straight from the script rather than through a view (the view's render runs
+/// the whole page's queries and partials natively too): the card's block is Ruby's, which the gem captures as Rails does.
+/// Not an app of nothing else: a Spinel tree with no model leaves the runtime record's schema untyped.
 #[allow(dead_code)]
 pub fn native_app() -> Option<emit_and_run::Overlay> {
     let fixture = roundhouse::fixtures::real_blog();
     let (gemfile, lock) = gemfiles(fixture);
-    let mut overlay = emit_and_run::empty_app()
+    let mut overlay = emit_and_run::real_blog()
         .write("Gemfile", &gemfile)
         .write("Gemfile.lock", &lock)
         .write(".bundle/config", "---\nBUNDLE_PATH: \"vendor/bundle\"\n")
-        .write("config/application.rb", "require_relative \"boot\"\n\nrequire \"rails/all\"\n\nBundler.require(*Rails.groups)\n\nmodule Demo\n  class Application < Rails::Application\n    config.load_defaults 8.1\n  end\nend\n")
-        .write("config/routes.rb", "Rails.application.routes.draw do\nend\n")
         .write("app/components/greeting_component.rb", COMPONENT)
         .write("app/components/greeting_component.html.erb", TEMPLATE)
         .write("app/components/card_component.rb", CARD)
