@@ -23,8 +23,6 @@ pub(super) struct Delegation {
     pub(super) block: bool,
     /// Every call passes this many arguments and no block: the forwarder hands them on, as Rails' `...` does.
     pub(super) arity: usize,
-    /// Calls of several shapes (arities, keywords, a block): the forwarder hands on all it is given, as Rails' `...` does.
-    pub(super) forward_all: bool,
 }
 
 #[derive(Default)]
@@ -175,7 +173,6 @@ impl<'a> DelegateEligibility<'a> {
             }
             let mut block = false;
             let mut arity = 0;
-            let mut forward_all = false;
             if !method.as_str().ends_with('=') {
                 if let Some(calls) = self.called_with_args.get(&name) {
                     let block_only = calls.has_block
@@ -198,11 +195,7 @@ impl<'a> DelegateEligibility<'a> {
                     } else if let Some(n) = fixed {
                         arity = n;
                     } else if !forwardable_operator {
-                        // Not left unexpanded: a tree without `Module#delegate` (Spinel's) would skip the declaration.
-                        if declaration.allow_nil {
-                            return None;
-                        }
-                        forward_all = true;
+                        return None;
                     }
                 }
             }
@@ -217,7 +210,6 @@ impl<'a> DelegateEligibility<'a> {
                 allow_nil: declaration.allow_nil,
                 block,
                 arity,
-                forward_all,
             });
         }
         if self.supported_target_methods.is_some_and(|supported| {
