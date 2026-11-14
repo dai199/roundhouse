@@ -6417,6 +6417,10 @@ fn gem_declaration_order(app: &App) -> Vec<String> {
             return;
         }
         let Some(program) = programs.get(source) else { return };
+        // Not left out for being lazy: Spinel loads an autoload's file as the program starts, and a constant the gem
+        // autoloads is read before the app's files are done (view_component's `Base.inherited`, as each component
+        // loads, reads `CompileCache`). After this program's own items, as the first read comes after them.
+        let mut autoloads = Vec::new();
         for item in all_program_items(&program.items) {
             match item {
                 crate::app::ProgramItem::Require { feature, relative, .. } => {
@@ -6432,8 +6436,16 @@ fn gem_declaration_order(app: &App) -> Vec<String> {
                         }
                     }
                 }
+                crate::app::ProgramItem::Autoload { feature, .. } => {
+                    if let Some(target) = resolve_gem_require(known, source, feature, false) {
+                        autoloads.push(target);
+                    }
+                }
                 _ => {}
             }
+        }
+        for target in autoloads {
+            walk(&target, programs, known, app, seen, out);
         }
     }
     let mut seen = Default::default();
