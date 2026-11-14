@@ -240,6 +240,8 @@ SPINEL_TOOLCHAIN_SECONDS = {
     "real_blog_spinel_tests_pass": 265,
     "identical_cli_emission_reuses_native_build_but_changed_ruby_rebuilds": 187,
     "finite_concern_class_configuration_runs_natively": 133,
+    # The whole blog with view_component's sources built natively (about 700 s on a CI runner, 2026-11-14).
+    "view_component::a_component_renders_its_template_natively": 700,
 }
 SPINEL_TOOLCHAIN_DEFAULT_SECONDS = 80
 SPINEL_TOOLCHAIN_SHARDS = 5
