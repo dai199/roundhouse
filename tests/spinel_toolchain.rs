@@ -82,6 +82,10 @@ mod ordered_options;
 mod class_ext_app;
 #[path = "spinel_toolchain/class_ext.rs"]
 mod class_ext;
+#[path = "support/view_component_gem.rs"]
+mod view_component_gem;
+#[path = "spinel_toolchain/view_component.rs"]
+mod view_component;
 #[path = "support/class_attribute.rs"]
 mod class_attribute;
 #[path = "support/class_configuration.rs"]
