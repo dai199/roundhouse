@@ -85,5 +85,10 @@ module ActionView
     def view_flow
       nil
     end
+
+    # ERB::Util's `html_escape`, which Rails' view includes (view_component's `maybe_escape_html` calls it bare).
+    def html_escape(text)
+      ActionView::ViewHelpers.html_escape(text.to_s)
+    end
   end
 end
