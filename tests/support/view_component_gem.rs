@@ -94,7 +94,7 @@ pub fn app() -> Option<emit_and_run::Overlay> {
 /// page of the engine) and test helpers, the engine's Railtie and `Rails::Engine`, the runtime template compiler this
 /// tree replaces (`ActionView::Template`, its `class_eval`s), translations (`I18n` internals, keyword splats through
 /// `super`), collections (`ActionView::PartialIteration`), and method_source's computed requires.
-pub const KNOWN_GAPS: [&str; 13] = [
+pub const KNOWN_GAPS: [&str; 12] = [
     "@render_args has no known type",
     "@example_name has no known type",
     "@preview has no known type",
@@ -106,7 +106,6 @@ pub const KNOWN_GAPS: [&str; 13] = [
     "Module protocol not supported (all targets): method_defined? requires",
     "constant not supported (all targets): I18n::RESERVED_KEYS",
     "constant not supported (all targets): ActionView::PartialIteration",
-    "`<` with incompatible operand types",
     "file_statement_unsupported not supported (ruby)",
 ];
 
