@@ -158,14 +158,18 @@ fn from_source_gem(sources: &[crate::span::SourceFile], m: &crate::dialect::Meth
 
 /// Every other target has no safe String (Spinel has one only where components render): a source gem's marks are
 /// erased there, as the app's are.
+/// Not erased on Spinel where components render: its tree ships a safe String then (`runtime/spinel/safe_string_spinel.rb`),
+/// which `project::inject_spinel_active_support_requires` loads on this same test.
+pub fn spinel_keeps_marks(app: &App) -> bool {
+    app.library_classes.iter().any(|lc| lc.name.0.as_str() == "ViewComponent::Base")
+}
+
 pub fn lower_for_target(app: &App, target: crate::build_target::BuildTarget) -> Option<App> {
     use crate::build_target::BuildTarget;
     if matches!(target, BuildTarget::Ruby | BuildTarget::Jruby) {
         return None;
     }
-    // Not erased on Spinel where components render: its tree ships a safe String then (`runtime/spinel/safe_string_spinel.rb`).
-    // (the tree loads it where a ViewComponent renders, `inject_spinel_active_support_requires`, so the same test here)
-    if target == BuildTarget::Spinel && app.library_classes.iter().any(|lc| lc.name.0.as_str() == "ViewComponent::Base") {
+    if target == BuildTarget::Spinel && spinel_keeps_marks(app) {
         return None;
     }
     fn marks(e: &Expr) -> bool {

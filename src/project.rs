@@ -1950,7 +1950,7 @@ fn inject_cruby_date_calendar_helpers(boot: &mut String) -> Result<(), String> {
 /// `descendants` / `module_parents` (runtime/class_ext_spinel.rb), required only by a tree whose own code names them:
 /// Spinel types a method by every class that defines its name, so their `update` / `fetch` / `keys` in every tree
 /// would widen the arguments other classes' methods of those names are given (openssl's `Digest#update`).
-fn inject_spinel_active_support_requires(files: &mut Vec<(String, String)>) -> Result<(), String> {
+fn inject_spinel_active_support_requires(files: &mut Vec<(String, String)>, app: &App) -> Result<(), String> {
     let own = |needle: &dyn Fn(&str) -> bool| {
         files.iter().any(|(p, text)| p.ends_with(".rb") && !p.starts_with("runtime/") && needle(text))
     };
@@ -1975,8 +1975,9 @@ fn inject_spinel_active_support_requires(files: &mut Vec<(String, String)>) -> R
         requires.push_str("require_relative \"runtime/class_ext_spinel\"\n");
         sigs.push("class_ext_spinel");
     }
-    // After the shared view helpers, whose `html_escape` and `raw` it reopens: a tree that renders components.
-    let safe = own(&|text| text.contains("ViewComponent::Base"));
+    // After the shared view helpers, whose `html_escape` and `raw` it reopens: where the marks stay, not where a file names
+    // the class (Spinel's tree nests a namespace's classes, `module ViewComponent` / `class Base`).
+    let safe = crate::lower::html_safe::spinel_keeps_marks(app);
     if safe {
         sigs.push("safe_string_spinel");
     }
@@ -10433,7 +10434,7 @@ fn spinel_files_with_source_markers(
     // both come through here. The ruby family calls `spinel_files`
     // directly and keeps `ConfigurationFile`.
     drop_yaml_configuration_file(&mut files);
-    inject_spinel_active_support_requires(&mut files)?;
+    inject_spinel_active_support_requires(&mut files, app)?;
     Ok((files, stems))
 }
 
