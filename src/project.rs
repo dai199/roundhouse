@@ -3534,6 +3534,9 @@ fn target_files_inner(
     if !matches!(target, BuildTarget::Ruby | BuildTarget::Jruby) {
         refuse_conditional_definitions(app, target);
     }
+    if target == BuildTarget::Spinel {
+        refuse_unexpanded_delegates(app);
+    }
     let without_auto_sources;
     let app = match without_auto_source_gems(app, target) {
         Some(trimmed) => {
@@ -6268,6 +6271,25 @@ fn refuse_conditional_definitions(app: &App, target: BuildTarget) {
                 },
             );
             emit::diagnostics::push(diagnostic);
+        }
+    }
+}
+
+/// A `delegate` the ingest expansion could not write as methods (`ingest::delegate`) stays a class-body call, which the
+/// ruby family runs through `Module#delegate` (`runtime/spinel/module_delegate.rb`); Spinel has none and skips the
+/// call, so each such declaration is an error there.
+fn refuse_unexpanded_delegates(app: &App) {
+    for lc in &app.library_classes {
+        for call in lc.unknown_calls.iter().filter(|call| crate::ingest::delegate::is_delegate_declaration(call)) {
+            emit::diagnostics::push(crate::diagnostic::Diagnostic::unsupported(
+                call.span,
+                Some(crate::ident::Symbol::from("spinel")),
+                "delegate",
+                format!(
+                    "`{}`'s `delegate` is not written as methods (its names, target or options are not read statically), and Spinel defines no `Module#delegate`",
+                    lc.name.0.as_str()
+                ),
+            ));
         }
     }
 }

@@ -71,7 +71,91 @@ pub fn lower_delegates(app: &mut crate::App) {
         }
     }
 
+    spell_static_splats(app);
     lower_library_class_delegates(app, &model_concerns);
+}
+
+/// A `delegate(*names, to: …)` whose splat the source spells statically, written as its names: a literal Array, or the
+/// `keys` of the literal Hash a library class method answers (view_component's
+/// `delegate(*ViewComponent::Config.defaults.keys, to: :config)`, where `defaults` answers
+/// `OrderedOptions.new.merge!({ … })`). Any other splat stays a declaration the expansion does not read.
+fn spell_static_splats(app: &mut crate::App) {
+    use crate::expr::{ExprNode, Literal};
+    fn literal_keys(e: &Expr) -> Option<Vec<crate::ident::Symbol>> {
+        match &*e.node {
+            ExprNode::Seq { exprs } => exprs.last().and_then(literal_keys),
+            ExprNode::Hash { entries, .. } => entries
+                .iter()
+                .map(|(k, _)| match &*k.node {
+                    ExprNode::Lit { value: Literal::Sym { value } } => Some(value.clone()),
+                    _ => None,
+                })
+                .collect(),
+            // Not any receiver's `merge!`: one a constructor answers, empty until the Hash it is handed.
+            ExprNode::Send { recv: Some(recv), method, args, block: None, .. }
+                if matches!(method.as_str(), "merge!" | "update")
+                    && matches!(&*recv.node, ExprNode::Send { method, args, .. } if method.as_str() == "new" && args.is_empty()) =>
+            {
+                match args.as_slice() {
+                    [hash] => literal_keys(hash),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+    let names_of = |app: &crate::App, e: &Expr| -> Option<Vec<crate::ident::Symbol>> {
+        match &*e.node {
+            ExprNode::Array { elements, .. } => elements
+                .iter()
+                .map(|el| match &*el.node {
+                    ExprNode::Lit { value: Literal::Sym { value } } => Some(value.clone()),
+                    _ => None,
+                })
+                .collect(),
+            ExprNode::Send { recv: Some(recv), method, args, block: None, .. } if method.as_str() == "keys" && args.is_empty() => {
+                let ExprNode::Send { recv: Some(owner), method: reader, args: none, block: None, .. } = &*recv.node else { return None };
+                let ExprNode::Const { path } = &*owner.node else { return None };
+                if !none.is_empty() {
+                    return None;
+                }
+                let name = path.iter().map(|p| p.as_str()).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("::");
+                let mut bodies = app.library_classes.iter().filter(|c| c.name.0.as_str() == name).flat_map(|c| {
+                    c.methods.iter().filter(|m| m.receiver == crate::dialect::MethodReceiver::Class && &m.name == reader)
+                });
+                let method = bodies.next()?;
+                // Not one of several definitions: which one answers depends on load order.
+                if bodies.next().is_some() {
+                    return None;
+                }
+                literal_keys(&method.body)
+            }
+            _ => None,
+        }
+    };
+    let mut spelled: Vec<(usize, usize, usize, Vec<crate::ident::Symbol>)> = Vec::new();
+    for (ci, lc) in app.library_classes.iter().enumerate() {
+        for (ui, call) in lc.unknown_calls.iter().enumerate() {
+            let ExprNode::Send { recv: None, method, args, .. } = &*call.node else { continue };
+            if method.as_str() != "delegate" {
+                continue;
+            }
+            for (ai, arg) in args.iter().enumerate() {
+                if let ExprNode::Splat { value } = &*arg.node
+                    && let Some(names) = names_of(app, value)
+                {
+                    spelled.push((ci, ui, ai, names));
+                }
+            }
+        }
+    }
+    for (ci, ui, ai, names) in spelled.into_iter().rev() {
+        let call = &mut app.library_classes[ci].unknown_calls[ui];
+        let ExprNode::Send { args, .. } = &mut *call.node else { continue };
+        let span = args[ai].span;
+        let literals: Vec<Expr> = names.into_iter().map(|value| Expr::new(span, ExprNode::Lit { value: Literal::Sym { value } })).collect();
+        args.splice(ai..=ai, literals);
+    }
 }
 
 fn lower_library_class_delegates(
@@ -137,7 +221,7 @@ fn includer_free_target(expr: &Expr) -> bool {
     })
 }
 
-pub(super) fn is_delegate_declaration(expr: &Expr) -> bool {
+pub(crate) fn is_delegate_declaration(expr: &Expr) -> bool {
     matches!(&*expr.node, ExprNode::Send { recv: None, method, .. } if method.as_str() == "delegate")
 }
 
