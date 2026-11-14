@@ -25,6 +25,11 @@ pub fn apply_method_missing_calls(app: &mut App, registry: &HashMap<ClassId, cra
         .map(|c| (c.name.0.as_str().to_string(), c.parent.as_ref().map(|p| p.0.as_str().trim_start_matches("::").to_string())))
         .collect();
     let core_of = |id: &ClassId| -> &'static [&'static str] {
+        // Not Object's alone for Rails' OrderedOptions, a Hash on the ruby family's tree (Spinel's holds one, and
+        // answers only what its own class defines).
+        if id.0.as_str() == "ActiveSupport::OrderedOptions" && target != crate::build_target::BuildTarget::Spinel {
+            return super::core_instance_methods::HASH;
+        }
         let mut current = id.0.as_str().to_string();
         for _ in 0..32 {
             let Some(Some(parent)) = parents.get(&current) else { break };

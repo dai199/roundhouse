@@ -1946,6 +1946,52 @@ fn inject_cruby_date_calendar_helpers(boot: &mut String) -> Result<(), String> {
     }
 }
 
+/// Spinel's `ActiveSupport::OrderedOptions` (runtime/ordered_options_spinel.rb) and its `Class` reopen with
+/// `descendants` / `module_parents` (runtime/class_ext_spinel.rb), required only by a tree whose own code names them:
+/// Spinel types a method by every class that defines its name, so their `update` / `fetch` / `keys` in every tree
+/// would widen the arguments other classes' methods of those names are given (openssl's `Digest#update`).
+fn inject_spinel_active_support_requires(files: &mut Vec<(String, String)>) -> Result<(), String> {
+    let own = |needle: &dyn Fn(&str) -> bool| {
+        files.iter().any(|(p, text)| p.ends_with(".rb") && !p.starts_with("runtime/") && needle(text))
+    };
+    let mut requires = String::new();
+    let mut sigs = Vec::new();
+    if own(&|text| text.contains("OrderedOptions")) {
+        requires.push_str("require_relative \"runtime/ordered_options_spinel\"\n");
+        sigs.push("ordered_options_spinel");
+    }
+    if own(&|text| [".descendants", ".module_parent", "module_parents", "module_parent_name"].iter().any(|n| text.contains(n))) {
+        requires.push_str("require_relative \"runtime/class_ext_spinel\"\n");
+        sigs.push("class_ext_spinel");
+    }
+    // After the shared view helpers, whose `html_escape` and `raw` it reopens: a tree that renders components.
+    let safe = own(&|text| text.contains("ViewComponent::Base"));
+    if safe {
+        sigs.push("safe_string_spinel");
+    }
+    if requires.is_empty() && !safe {
+        return Ok(());
+    }
+    let Some((_, boot)) = files.iter_mut().find(|(p, _)| p == "boot.rb") else {
+        return Err("boot.rb missing for the ActiveSupport requires".into());
+    };
+    if !requires.is_empty() {
+        let anchor = "require_relative \"runtime/rails\"\n";
+        let at = boot.find(anchor).ok_or("boot.rb missing the rails require (ActiveSupport anchor)")?;
+        boot.insert_str(at + anchor.len(), &requires);
+    }
+    if safe {
+        let anchor = "require_relative \"runtime/action_controller\"\n";
+        let at = boot.find(anchor).ok_or("boot.rb missing the action_controller require (safe String anchor)")?;
+        boot.insert_str(at + anchor.len(), "require_relative \"runtime/safe_string_spinel\"\n");
+    }
+    for stem in sigs {
+        let rbs = crate::runtime_files::read_to_string(&format!("runtime/spinel/{stem}.rbs"))?;
+        files.push((format!("sig/runtime/{stem}.rbs"), rbs));
+    }
+    Ok(())
+}
+
 /// `boot.rb` requires `runtime/array_column` after the JSON-column seam,
 /// only for an app with a stored array column (`lower::array_columns`).
 /// The ruby overlay's boot replaces Spinel's, so both trees call this.
@@ -3472,6 +3518,10 @@ fn target_files_lent(
 /// through its Gemfile and require (`ingest::auto_source_gems`): its
 /// compiled classes leave this tree, and the gem reads as the unknown
 /// boundary the Gemfile wiring declares.
+fn is_ruby2_keywords_call(call: &crate::expr::Expr) -> bool {
+    matches!(&*call.node, crate::expr::ExprNode::Send { recv: None, method, .. } if method.as_str() == "ruby2_keywords")
+}
+
 fn without_auto_source_gems(app: &App, target: BuildTarget) -> Option<App> {
     if app.auto_source_gems.is_empty() || !matches!(target, BuildTarget::Ruby | BuildTarget::Jruby) {
         return None;
@@ -3572,6 +3622,21 @@ fn target_files_inner(
             &shaken_gems
         }
         None => app,
+    };
+    // Not replayed on Spinel: it defines no `ruby2_keywords`, where the source's
+    // `ruby2_keywords(:m) if respond_to?(:ruby2_keywords, true)` skips it, and its keywords are passed as written.
+    let without_ruby2_keywords;
+    let app = if target == BuildTarget::Spinel
+        && app.library_classes.iter().any(|lc| lc.unknown_calls.iter().any(is_ruby2_keywords_call))
+    {
+        let mut trimmed = app.clone();
+        for lc in &mut trimmed.library_classes {
+            lc.unknown_calls.retain(|call| !is_ruby2_keywords_call(call));
+        }
+        without_ruby2_keywords = trimmed;
+        &without_ruby2_keywords
+    } else {
+        app
     };
     let without_health;
     let app = match without_rails_health_controller(app, target) {
@@ -6389,6 +6454,10 @@ fn gem_declaration_order(app: &App) -> Vec<String> {
             return;
         }
         let Some(program) = programs.get(source) else { return };
+        // Not left out for being lazy: Spinel loads an autoload's file as the program starts, and a constant the gem
+        // autoloads is read before the app's files are done (view_component's `Base.inherited`, as each component
+        // loads, reads `CompileCache`). After this program's own items, as the first read comes after them.
+        let mut autoloads = Vec::new();
         for item in all_program_items(&program.items) {
             match item {
                 crate::app::ProgramItem::Require { feature, relative, .. } => {
@@ -6404,8 +6473,16 @@ fn gem_declaration_order(app: &App) -> Vec<String> {
                         }
                     }
                 }
+                crate::app::ProgramItem::Autoload { feature, .. } => {
+                    if let Some(target) = resolve_gem_require(known, source, feature, false) {
+                        autoloads.push(target);
+                    }
+                }
                 _ => {}
             }
+        }
+        for target in autoloads {
+            walk(&target, programs, known, app, seen, out);
         }
     }
     let mut seen = Default::default();
@@ -9182,7 +9259,7 @@ fn unavailable_class_module_construct(name: &str, target: &str) -> Option<&'stat
     // Spinel recognizes GeneratorError only as a literal rescue name.
     if target == "spinel" {
         // The Arel ordering and predicate nodes live on the CRuby overlay (`arel_predicates.rb`).
-        if matches!(name, "ActiveSupport::ConfigurationFile" | "ActiveSupport::OrderedOptions" | "Arel::Nodes::Ascending" | "Arel::Nodes::Descending" | "Arel::Nodes::Predicate") {
+        if matches!(name, "ActiveSupport::ConfigurationFile" | "Arel::Nodes::Ascending" | "Arel::Nodes::Descending" | "Arel::Nodes::Predicate") {
             return Some("ruby_family_runtime_constant");
         }
         // `Observable` is `require "observer"`, which `SPINEL_LACKS` keeps
@@ -10345,6 +10422,7 @@ fn spinel_files_with_source_markers(
     // both come through here. The ruby family calls `spinel_files`
     // directly and keeps `ConfigurationFile`.
     drop_yaml_configuration_file(&mut files);
+    inject_spinel_active_support_requires(&mut files)?;
     Ok((files, stems))
 }
 
