@@ -1315,7 +1315,7 @@ pub(super) fn view_component_templates<V: crate::vfs::Vfs + ?Sized>(app: &mut Ap
 
 fn compile_components<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V) {
     let indexed = app.sources.len();
-    let hook = "module ViewComponent\n  class Compiler\n    def compile(raise_errors: false, force: false)\n      return if compiled? && !force\n      return if @component == ViewComponent::Base\n      @component.validate_initialization_parameters! if raise_errors\n      @component.register_default_slots\n      @component.build_i18n_backend\n      CompileCache.register(@component)\n    end\n  end\n\n  class Base\n    def render_template_for(variant = nil, format = nil)\n      call\n    end\n\n    def self.inherited(child)\n      compile\n      if defined?(Rails) && Rails.application && !(child < Rails.application.routes.url_helpers)\n        child.include Rails.application.routes.url_helpers\n      end\n      child.identifier = caller_locations(1, 10).reject { |l| l.base_label == \"inherited\" }[0].path\n      if defined?(Rails) && Rails.application\n        child.virtual_path = child.identifier.gsub(/(.*#{Regexp.quote(ViewComponent::Base.config.view_component_path)})|(\\.rb)/, \"\")\n      end\n      child.with_collection_parameter provided_collection_parameter\n      super\n    end\n\n    def self.renders_one(slot_name, callable = nil)\n      validate_singular_slot_name(slot_name)\n      validate_plural_slot_name(ActiveSupport::Inflector.pluralize(slot_name).to_sym)\n      register_slot(slot_name, collection: false, callable: callable)\n    end\n\n    def self.renders_many(slot_name, callable = nil)\n      validate_plural_slot_name(slot_name)\n      validate_singular_slot_name(ActiveSupport::Inflector.singularize(slot_name).to_sym)\n      register_slot(slot_name, collection: true, callable: callable)\n    end\n\n    def self.define_slot(slot_name, collection:, callable:)\n      slot = {collection: collection}\n      return slot unless callable\n      if callable.respond_to?(:method_defined?) && callable.method_defined?(:render_in)\n        slot[:renderable] = callable\n      elsif callable.is_a?(String)\n        slot[:renderable_class_name] = callable\n      elsif callable.respond_to?(:call)\n        slot[:renderable_function] = instance_method(:\"_call_#{slot_name}\")\n      else\n        raise(InvalidSlotDefinitionError)\n      end\n      slot\n    end\n\n    def self.register_polymorphic_slot(slot_name, types, collection:)\n      raise NotImplementedError, \"roundhouse: polymorphic slots are not supported\"\n    end\n\n    def self.use_helper(helper_method, from: nil, prefix: false)\n      raise NotImplementedError, \"roundhouse: use_helpers is not supported\"\n    end\n  end\nend\n";
+    let hook = "module ViewComponent\n  class Compiler\n    def compile(raise_errors: false, force: false)\n      return if compiled? && !force\n      return if @component == ViewComponent::Base\n      @component.validate_initialization_parameters! if raise_errors\n      @component.register_default_slots\n      @component.build_i18n_backend\n      CompileCache.register(@component)\n    end\n  end\n\n  class Base\n    def render_template_for(variant = nil, format = nil)\n      call\n    end\n\n    def self.inherited(child)\n      compile\n      if defined?(Rails) && Rails.application && !(child < Rails.application.routes.url_helpers)\n        child.include Rails.application.routes.url_helpers\n      end\n      child.identifier = caller_locations(1, 10).reject { |l| l.base_label == \"inherited\" }[0].path\n      if defined?(Rails) && Rails.application\n        child.virtual_path = child.identifier.gsub(/(.*#{Regexp.quote(ViewComponent::Base.config.view_component_path)})|(\\.rb)/, \"\")\n      end\n      child.with_collection_parameter provided_collection_parameter\n      super\n    end\n\n    def self.renders_one(slot_name, callable = nil)\n      validate_singular_slot_name(slot_name)\n      validate_plural_slot_name(ActiveSupport::Inflector.pluralize(slot_name).to_sym)\n      register_slot(slot_name, collection: false, callable: callable)\n    end\n\n    def self.renders_many(slot_name, callable = nil)\n      validate_plural_slot_name(slot_name)\n      validate_singular_slot_name(ActiveSupport::Inflector.singularize(slot_name).to_sym)\n      register_slot(slot_name, collection: true, callable: callable)\n    end\n\n    def self.define_slot(slot_name, collection:, callable:)\n      slot = {collection: collection}\n      return slot unless callable\n      if callable.respond_to?(:method_defined?) && callable.method_defined?(:render_in)\n        slot[:renderable] = callable\n      elsif callable.is_a?(String)\n        slot[:renderable_class_name] = callable\n      elsif callable.respond_to?(:call)\n        slot[:renderable_function] = instance_method(:\"_call_#{slot_name}\")\n      else\n        raise(InvalidSlotDefinitionError)\n      end\n      slot\n    end\n\n    def self.register_polymorphic_slot(slot_name, types, collection:)\n      raise NotImplementedError, \"roundhouse: polymorphic slots are not supported\"\n    end\n\n    def self.use_helper(helper_method, from: nil, prefix: false)\n      raise NotImplementedError, \"roundhouse: use_helpers is not supported\"\n    end\n\n    def self.build_i18n_backend\n      nil\n    end\n\n    def self.translate(key = nil, **options)\n      raise NotImplementedError, \"roundhouse: component translations are not supported\"\n    end\n\n    def self.t(key = nil, **options)\n      raise NotImplementedError, \"roundhouse: component translations are not supported\"\n    end\n  end\n\n  module Translatable\n    def translate(key = nil, **options)\n      raise NotImplementedError, \"roundhouse: component translations are not supported\"\n    end\n\n    def t(key = nil, **options)\n      raise NotImplementedError, \"roundhouse: component translations are not supported\"\n    end\n  end\n\n  class Slot\n    def to_s\n      return @content if defined?(@content)\n      view_context = @parent.send(:view_context)\n      if defined?(@__vc_content_block) && defined?(@__vc_content_set_by_with_content)\n        raise DuplicateSlotContentError.new(self.class.name)\n      end\n      @content =\n        if __vc_component_instance?\n          @__vc_component_instance.__vc_original_view_context = @parent.__vc_original_view_context\n          if defined?(@__vc_content_block)\n            @__vc_component_instance.render_in(view_context) do |*args|\n              @__vc_content_block.call(*args)\n            end\n          else\n            @__vc_component_instance.render_in(view_context)\n          end\n        elsif defined?(@__vc_content)\n          @__vc_content\n        elsif defined?(@__vc_content_block)\n          view_context.capture(&@__vc_content_block)\n        elsif defined?(@__vc_content_set_by_with_content)\n          @__vc_content_set_by_with_content\n        end\n      @content = @content.to_s\n    end\n  end\nend\n";
     if let Ok(replacements) = super::library_class::ingest_library_classes(hook.as_bytes(), VIEW_COMPONENT_HOOK) {
         for replacement in replacements {
             // Every part of the class drops the gem's own definition (a reopening holds one too), and the first takes
@@ -1334,6 +1334,20 @@ fn compile_components<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V) {
             }
         }
     }
+    // The run-time template compiler the hook's `compile` no longer calls, and Base's `method_missing`, which the gem
+    // defines only in development and test to hint at `helpers.`: Rails' production class has none.
+    for lc in app.library_classes.iter_mut() {
+        let unused: &[&str] = match lc.name.0.as_str() {
+            "ViewComponent::Compiler" => &["define_render_template_for", "gather_templates", "template_errors"],
+            "ViewComponent::Template" => &["compile_to_component", "compiled_source"],
+            "ViewComponent::Base" => &["method_missing"],
+            _ => continue,
+        };
+        lc.methods.retain(|m| m.receiver != crate::dialect::MethodReceiver::Instance || !unused.contains(&m.name.as_str()));
+        lc.conditional_definitions.retain(|c| {
+            !c.arms.iter().all(|arm| arm.methods.iter().all(|m| unused.contains(&m.name.as_str())) && arm.nested.is_empty())
+        });
+    }
     let files: Vec<(String, Vec<crate::ident::ClassId>)> = app.library_class_files.iter().filter(|(path, _)| path.starts_with("app/components/") || path.contains("/app/components/")).cloned().collect();
     for (path, names) in files {
         let Some(file_stem) = path.strip_suffix(".rb") else { continue };
@@ -1341,6 +1355,11 @@ fn compile_components<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V) {
         for class in &names {
             if renders_as_component(app, class) {
                 view_component_slots(app, vfs, &path, class);
+                for lc in app.library_classes.iter().filter(|c| &c.name == class) {
+                    for m in &lc.methods {
+                        report_component_translations(&m.body);
+                    }
+                }
             }
             // Each class's own template: the file's class beside it (as the file is spelled: maybe's `DS/button.rb`),
             // a class nested in it under the file's name (`Outer::InnerComponent` in outer_component.rb is
@@ -1364,6 +1383,7 @@ fn compile_components<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V) {
             let (compiled, map) = crate::erb::compile_erb_mapped(&source);
             let Ok(mut body) = super::expr::ingest_ruby_program(&compiled, &template) else { continue };
             crate::erb::translate_spans(&mut body, &map);
+            report_component_translations(&body);
             // Not its own file's: one outside the app's `app/components` (a gem's) was not registered before the index.
             if late {
                 synthetic_constants(&mut body);
@@ -1383,6 +1403,23 @@ fn synthetic_constants(e: &mut Expr) {
         e.span = crate::span::Span::synthetic();
     }
     e.node.for_each_child_mut(&mut |c| synthetic_constants(c));
+}
+
+/// A component's `t` / `translate`, which the hook answers with a raise: the gem's per-component I18n backend (sidecar
+/// `*.yml` loaded into an `I18n::Backend::Simple` subclass) is not modelled.
+fn report_component_translations(body: &Expr) {
+    if let ExprNode::Send { recv: None, method, .. } = &*body.node
+        && matches!(method.as_str(), "t" | "translate")
+        && !body.span.is_synthetic()
+    {
+        super::prism::push(crate::diagnostic::Diagnostic::unsupported(
+            body.span,
+            None,
+            "view_component",
+            "a component's translation (its sidecar locale files read through the gem's I18n backend) is not supported",
+        ));
+    }
+    body.node.for_each_child(&mut |c| report_component_translations(c));
 }
 
 fn unsupported_component_macro(call: &ruby_prism::CallNode<'_>) -> Option<&'static str> {
