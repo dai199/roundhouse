@@ -131,7 +131,7 @@ end
     rescue StandardError
       raised = true
     end
-    check("old stamp kept", raised && Stamp.exists?(gone.id) && a.stamp.equal?(gone) && gone.destroyed? && !gone.persisted?)
+    check("old stamp kept", raised && Stamp.exists?(gone.id) && a.stamp.equal?(gone) && gone.destroyed? && !gone.persisted? && gone.author_id == a.id)
     # A required belongs_to can't take the nulled key: replacing raises,
     # and the old record keeps its key.
     a.card = Card.new

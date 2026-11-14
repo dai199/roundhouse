@@ -113,6 +113,14 @@ end
     c.posts = [Post.new(title: "w")]
     c.posts.destroy_all
     check("destroy_all after writer", c.posts.size == 0 && c.posts.to_a.empty?)
+    # The association keeps its own list: changing the assigned Array
+    # afterwards doesn't change what the next replacement removes.
+    linked = Post.create!(title: "linked", author: c)
+    rows = [linked]
+    c.posts = rows
+    rows.clear
+    c.posts = []
+    check("assigned array copied", Post.find(linked.id).author_id.nil?)
     # A new owner's target is the list it holds, whatever the rows say.
     other = Post.create!(title: "other", author: b)
     o2 = Author.new(name: "o2")
