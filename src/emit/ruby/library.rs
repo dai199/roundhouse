@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use super::super::EmittedFile;
 use crate::App;
 use crate::dialect::{AccessorKind, LibraryClass, LibraryClassOrigin, MethodDef, MethodReceiver, MethodVisibility};
-use crate::expr::{Expr, ExprNode, LValue, Literal};
+use crate::expr::{Expr, ExprNode, LValue, Literal, Pattern};
 use crate::ident::{ClassId, Symbol, VarId};
 use crate::span::Span;
 use crate::lower::view_to_library::hoist_constants::{hoist_pure_helper_constants, is_view_helpers_const};
@@ -2521,11 +2521,40 @@ pub(crate) fn apply_belongs_to_memoization(lcs: &mut [LibraryClass], app: &App) 
             })
             .collect();
         for (name, fk) in names {
+            // The reader carries the cache guard only where the preload
+            // lowering ran (an app with `includes`); without it the reader
+            // re-queried after a writer, a has_one's inverse or a preload
+            // had installed the target. A model's own reader is its own.
+            if !model.methods().any(|m| m.name == name && m.receiver == MethodReceiver::Instance) {
+                ensure_cache_guard(lc, &name);
+            }
             memoize_reader(lc, &name);
             invalidate_on_fk_write(lc, &name, &fk);
             invalidate_on_assoc_write(lc, &name, &fk);
         }
     }
+}
+
+/// `body` -> `Seq[return @cache if @loaded, body]`, unless it opens
+/// with that guard already.
+fn ensure_cache_guard(lc: &mut LibraryClass, name: &Symbol) {
+    let loaded = Symbol::from(format!("{}_loaded", name.as_str()));
+    let Some(m) = lc
+        .methods
+        .iter_mut()
+        .find(|m| &m.name == name && m.receiver == MethodReceiver::Instance)
+    else {
+        return;
+    };
+    if let ExprNode::Seq { exprs } = &*m.body.node {
+        if exprs.first().is_some_and(|e| matches!(&*e.node,
+            ExprNode::If { cond, .. } if matches!(&*cond.node, ExprNode::Ivar { name } if name == &loaded)))
+        {
+            return;
+        }
+    }
+    let old = std::mem::replace(&mut m.body, Expr::new(Span::synthetic(), ExprNode::Seq { exprs: vec![] }));
+    m.body = Expr::new(Span::synthetic(), ExprNode::Seq { exprs: vec![preload_cache_guard(name), old] });
 }
 
 /// `Seq[guard, query]` -> `Seq[guard, @cache = query, @loaded = true, @cache]`.
@@ -2622,30 +2651,99 @@ fn invalidate_on_assoc_write(lc: &mut LibraryClass, name: &Symbol, fk: &Symbol) 
     m.body = Expr::new(span, ExprNode::Seq { exprs: stmts });
 }
 
-/// `def <fk>=(value); @<fk> = value; end` gains `@<name>_loaded = false`.
+/// `def <fk>=(value); @<fk> = value; end` drops the loaded target when the
+/// key changes, and so does the `[]=` arm for the key (`self[:<fk>] = v`,
+/// `write_attribute`). Rails' reader compares the key with the one it loaded
+/// the target under (`stale_state`), so writing the key the target already
+/// has keeps it: a has_one writer's inverse, then its key, holds.
 fn invalidate_on_fk_write(lc: &mut LibraryClass, name: &Symbol, fk: &Symbol) {
     let writer = Symbol::from(format!("{}=", fk.as_str()));
-    let Some(m) = lc
+    if let Some(m) = lc
         .methods
         .iter_mut()
         .find(|m| m.name == writer && m.receiver == MethodReceiver::Instance)
+    {
+        m.body = keep_target_unless_key_changes(&m.body, name, fk);
+    }
+    let Some(index) = lc
+        .methods
+        .iter_mut()
+        .find(|m| m.name.as_str() == "[]=" && m.receiver == MethodReceiver::Instance)
     else {
         return;
     };
-    let span = m.body.span;
+    if let ExprNode::Case { arms, .. } = &mut *index.body.node {
+        for arm in arms.iter_mut() {
+            if matches!(&arm.pattern, Pattern::Lit { value: Literal::Sym { value } } if value == fk) {
+                arm.body = keep_target_unless_key_changes(&arm.body, name, fk);
+            }
+        }
+    }
+}
+
+/// `was = <fk>; begin <write> ensure @<name>_loaded = <fk> == was && @<name>_loaded end`.
+///
+/// The key is read through its reader: a held column stores under
+/// `@<fk>_raw` (`read_held_columns_through_readers`), so `@<fk>` would read
+/// nil on both sides. The reset is an `ensure`, so a custom writer that
+/// returns early still drops a stale target, and the write's own answer
+/// stays the method's (`x.author_id = 3` is 3).
+fn keep_target_unless_key_changes(write: &Expr, name: &Symbol, fk: &Symbol) -> Expr {
+    let span = write.span;
+    let was = Symbol::from(format!("__rh_{}_was", fk.as_str()));
+    let fk_read = || {
+        Expr::new(
+            span,
+            ExprNode::Send {
+                recv: Some(Expr::new(span, ExprNode::SelfRef)),
+                method: fk.clone(),
+                args: vec![],
+                block: None,
+                parenthesized: false,
+            },
+        )
+    };
+    let loaded = Symbol::from(format!("{}_loaded", name.as_str()));
+    let remember = Expr::new(
+        span,
+        ExprNode::Assign { target: LValue::Var { id: VarId(0), name: was.clone() }, value: fk_read() },
+    );
+    let unchanged = Expr::new(
+        span,
+        ExprNode::Send {
+            recv: Some(fk_read()),
+            method: Symbol::from("=="),
+            args: vec![Expr::new(span, ExprNode::Var { id: VarId(0), name: was })],
+            block: None,
+            parenthesized: false,
+        },
+    );
     let reset = Expr::new(
         span,
         ExprNode::Assign {
-            target: LValue::Ivar { name: Symbol::from(format!("{}_loaded", name.as_str())) },
-            value: Expr::new(span, ExprNode::Lit { value: Literal::Bool { value: false } }),
+            target: LValue::Ivar { name: loaded.clone() },
+            value: Expr::new(
+                span,
+                ExprNode::BoolOp {
+                    op: crate::expr::BoolOpKind::And,
+                    surface: Default::default(),
+                    left: unchanged,
+                    right: Expr::new(span, ExprNode::Ivar { name: loaded }),
+                },
+            ),
         },
     );
-    let mut stmts = match &*m.body.node {
-        ExprNode::Seq { exprs } => exprs.clone(),
-        _ => vec![m.body.clone()],
-    };
-    stmts.insert(0, reset);
-    m.body = Expr::new(span, ExprNode::Seq { exprs: stmts });
+    let guarded = Expr::new(
+        span,
+        ExprNode::BeginRescue {
+            body: write.clone(),
+            rescues: Vec::new(),
+            else_branch: None,
+            ensure: Some(Box::new(reset)),
+            implicit: false,
+        },
+    );
+    Expr::new(span, ExprNode::Seq { exprs: vec![remember, guarded] })
 }
 
 /// Ruby-family pre-emit pass: an STI row hydrates as its SUBCLASS.
@@ -3338,9 +3436,11 @@ fn fold_autosave_call_into_hook(
 /// first hop is — recurse, adding one INNER JOIN per hop. Shapes a hop
 /// can't prove (missing models, no matching source) are left on the
 /// shared reader rather than guessed.
-/// KNOWN GAP: association scope-lambdas (`-> { order(...) }`, the
-/// upvoted vote-conditions) are dropped at ingest, so row order/filter
-/// can diverge from Rails until the lambda lands in the IR.
+/// The association's own scope lambda is grafted onto the relation
+/// (`through_reader_body`), and the through association's, when it is
+/// hash `where`s only, filters the through table
+/// (`through_hop_conditions`). KNOWN GAP: any other scope on the through
+/// association is not applied, so its rows can differ from Rails'.
 pub(crate) fn apply_through_assoc_lowering(lcs: &mut [LibraryClass], app: &App) {
     use crate::dialect::Association;
 
@@ -3369,7 +3469,74 @@ pub(crate) fn apply_through_assoc_lowering(lcs: &mut [LibraryClass], app: &App) 
                 continue;
             };
             m.body = through_reader_body(name, target, &join_sql, &where_sql, assoc_scope);
+            if let Some(hop) = through_hop_conditions(model, assoc, app) {
+                graft_through_hop(&mut m.body, hop);
+            }
         }
+    }
+}
+
+/// The through association's own scope, when it is only `where` with
+/// hash conditions (`has_many :published_posts, -> { where(published:
+/// true) }`), as conditions on its table: `where(posts: { published:
+/// true })`. Rails applies that scope to the through rows. A direct
+/// first hop only; any other scope shape stays the gap the pass's doc
+/// records.
+fn through_hop_conditions(model: &crate::dialect::Model, assoc: &crate::dialect::Association, app: &App) -> Option<Vec<Expr>> {
+    use crate::dialect::Association;
+    let Association::HasMany { through: Some(thr_name), .. } = assoc else { return None };
+    let (thr_target, scope) = model.associations().filter(|a| a.name() == thr_name).last().and_then(|thr| match thr {
+        Association::HasMany { target, through: None, scope: Some(scope), .. }
+        | Association::HasOne { target, through: None, scope: Some(scope), .. } => Some((target, scope)),
+        _ => None,
+    })?;
+    let table = app.models.iter().find(|m| &m.name == thr_target)?.table.0.clone();
+    let mut hashes = Vec::new();
+    let mut e = scope;
+    loop {
+        let ExprNode::Send { recv, method, args, block: None, .. } = &*e.node else { return None };
+        let [hash] = args.as_slice() else { return None };
+        let ExprNode::Hash { entries, .. } = &*hash.node else { return None };
+        if method.as_str() != "where" {
+            return None;
+        }
+        let conditions = Expr::new(hash.span, ExprNode::Hash { entries: entries.clone(), kwargs: false });
+        hashes.push(Expr::new(
+            hash.span,
+            ExprNode::Hash {
+                entries: vec![(
+                    Expr::new(hash.span, ExprNode::Lit { value: Literal::Sym { value: table.clone() } }),
+                    conditions,
+                )],
+                kwargs: true,
+            },
+        ));
+        match recv {
+            Some(inner) => e = inner,
+            None => return Some(hashes),
+        }
+    }
+}
+
+/// `<relation>.preloaded(…)` becomes `<relation>.where(<hop>)….preloaded(…)`.
+fn graft_through_hop(body: &mut Expr, hop: Vec<Expr>) {
+    let ExprNode::Send { recv: Some(recv), method, .. } = &mut *body.node else { return };
+    if method.as_str() != "preloaded" {
+        return;
+    }
+    for hash in hop {
+        let span = hash.span;
+        let inner = std::mem::replace(recv, Expr::new(span, ExprNode::Lit { value: Literal::Nil }));
+        *recv = Expr::new(
+            span,
+            ExprNode::Send {
+                recv: Some(inner),
+                method: Symbol::from("where"),
+                args: vec![hash],
+                block: None,
+                parenthesized: true,
+            },
+        );
     }
 }
 
@@ -12208,7 +12375,9 @@ fn preload_targets(model: &crate::dialect::Model, app: &App) -> Vec<(String, Pre
             continue;
         }
         match assoc {
-            Association::BelongsTo { name, target, foreign_key, .. } => {
+            // A scoped one keeps its lazy reader, which finds through the
+            // scope, as a scoped has_many does below.
+            Association::BelongsTo { name, target, foreign_key, scope: None, .. } => {
                 let Some(target_model) = app.models.iter().find(|m| &m.name == target) else {
                     continue;
                 };
@@ -12281,7 +12450,10 @@ fn preload_targets(model: &crate::dialect::Model, app: &App) -> Vec<(String, Pre
                         None => continue,
                     },
                 };
-                let Some(Association::HasMany { target: thr_target, as_interface, .. }) =
+                // A scoped hop keeps the lazy reader too: it filters the
+                // through table (`through_hop_conditions`) and this batch
+                // would not.
+                let Some(Association::HasMany { target: thr_target, as_interface, scope: None, .. }) =
                     model.associations().find(|a| {
                         matches!(a, Association::HasMany { name, .. } if name == thr_name)
                     })
@@ -12404,6 +12576,10 @@ fn preload_methods_source(model: &crate::dialect::Model, app: &App) -> String {
     // Batch loaders + belongs_to cache setters.
     for (name, kind) in &targets {
         match kind {
+            // A record whose target is already loaded keeps it (Rails'
+            // preloader skips a loaded association); the batch loads the
+            // rest and answers both for the next level, in one Array typed
+            // from `by_id.values` (Spinel can't add a separately built one).
             PreloadKind::BelongsTo { fk, target, table, key_list } => {
                 let _ = write!(
                     src,
@@ -12411,8 +12587,10 @@ fn preload_methods_source(model: &crate::dialect::Model, app: &App) -> String {
 def self._preload_batch_{name}(records)
   ids = []
   records.each do |r|
-    v = r.{fk}
-    ids << v unless v.nil? || v == 0
+    unless r.{name}_loaded?
+      v = r.{fk}
+      ids << v unless v.nil? || v == 0
+    end
   end
   ids.uniq!
   by_id = {{}}
@@ -12421,10 +12599,16 @@ def self._preload_batch_{name}(records)
       by_id[rec.id] = rec
     end
   end
+  out = by_id.values
   records.each do |r|
-    r._preload_{name}(by_id[r.{fk}])
+    if r.{name}_loaded?
+      held = r.{name}
+      out << held unless held.nil?
+    else
+      r._preload_{name}(by_id[r.{fk}])
+    end
   end
-  by_id.values
+  out
 end
 
 def _preload_{name}(rec)

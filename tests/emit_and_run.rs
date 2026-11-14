@@ -22229,3 +22229,17 @@ mod param_default_constant_rooting;
 mod compiled_rooted_constants;
 #[path = "emit_and_run/serializable_resource_as_json.rs"]
 mod serializable_resource_as_json;
+#[path = "emit_and_run/belongs_to_target.rs"]
+mod belongs_to_target;
+#[path = "emit_and_run/has_one_writer.rs"]
+mod has_one_writer;
+#[path = "emit_and_run/has_one_validate.rs"]
+mod has_one_validate;
+#[path = "emit_and_run/has_many_target.rs"]
+mod has_many_target;
+#[path = "emit_and_run/has_many_writer.rs"]
+mod has_many_writer;
+#[path = "emit_and_run/association_scopes.rs"]
+mod association_scopes;
+#[path = "emit_and_run/association_relation_calls.rs"]
+mod association_relation_calls;
