@@ -13,6 +13,20 @@ pub fn apply_method_missing_calls(app: &mut App, registry: &HashMap<ClassId, cra
     if !target.has_runtime_relation() {
         return;
     }
+    // Not `update` on Spinel's OrderedOptions, which defines only `merge!` (Rails' alias): an `update` beside it would type
+    // openssl's `Digest#update` by its Hash (`runtime/spinel/ordered_options_spinel.rb`).
+    if target == crate::build_target::BuildTarget::Spinel {
+        fn rename(e: &mut Expr) {
+            e.node.for_each_child_mut(&mut |c| rename(c));
+            if let ExprNode::Send { recv: Some(r), method, .. } = &mut *e.node
+                && method.as_str() == "update"
+                && matches!(r.ty.as_ref().map(Ty::peel_nilable), Some(Ty::Class { id, .. }) if id.0.as_str() == "ActiveSupport::OrderedOptions")
+            {
+                *method = Symbol::from("merge!");
+            }
+        }
+        crate::lower::for_each_emit_body(app, &mut |body| rename(body));
+    }
     let missing = Symbol::from("method_missing");
     let answers_missing = |id: &ClassId| {
         crate::analyze::diagnostics::method_registered_on(registry, Some(&Ty::Class { id: id.clone(), args: vec![].into() }), &missing)

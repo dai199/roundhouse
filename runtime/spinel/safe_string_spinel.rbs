@@ -6,6 +6,10 @@ class SafeString < String
   def <<: (untyped other) -> SafeString
   def concat: (untyped other) -> SafeString
   def safe_concat: (untyped other) -> SafeString
+  def replace: (untyped other) -> SafeString
+  def insert: (Integer index, untyped other) -> SafeString
+  def prepend: (untyped other) -> SafeString
+  def []=: (untyped index, untyped other) -> untyped
 end
 
 class String

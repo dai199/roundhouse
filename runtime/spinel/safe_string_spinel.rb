@@ -33,9 +33,26 @@ class SafeString < String
     super(ActionView::ViewHelpers.html_escape(other))
   end
 
-  # Rails' `safe_concat`: appended as it is.
+  # Rails' other writers (`replace`, `insert`, `prepend`, `[]=`): what they store escaped unless it is safe.
+  def replace(other)
+    super(ActionView::ViewHelpers.html_escape(other))
+  end
+
+  def insert(index, other)
+    super(index, ActionView::ViewHelpers.html_escape(other))
+  end
+
+  def prepend(other)
+    super(ActionView::ViewHelpers.html_escape(other))
+  end
+
+  def []=(index, other)
+    super(index, ActionView::ViewHelpers.html_escape(other))
+  end
+
+  # Rails' `safe_concat`: appended as it is (a safe String passes the escaping `replace` untouched).
   def safe_concat(other)
-    replace(String.new(self) + other.to_s)
+    replace(SafeString.new(String.new(self) + other.to_s))
   end
 end
 

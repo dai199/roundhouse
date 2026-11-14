@@ -170,7 +170,7 @@ fn spell_static_splats(app: &mut crate::App) {
         let inert = match &*body.body.node {
             ExprNode::Hash { entries, .. } => entries.iter().all(|(_, v)| !calls_anything(v)),
             _ => false,
-        };
+        } && body.params.iter().filter_map(|p| p.default.as_ref()).all(|d| !calls_anything(d));
         (!inert).then(|| recv.clone())
     };
     let mut evaluations: Vec<(usize, usize, Expr)> = Vec::new();

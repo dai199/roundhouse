@@ -164,7 +164,8 @@ pub fn lower_for_target(app: &App, target: crate::build_target::BuildTarget) -> 
         return None;
     }
     // Not erased on Spinel where components render: its tree ships a safe String then (`runtime/spinel/safe_string_spinel.rb`).
-    if target == BuildTarget::Spinel && !components(app).is_empty() {
+    // (the tree loads it where a ViewComponent renders, `inject_spinel_active_support_requires`, so the same test here)
+    if target == BuildTarget::Spinel && app.library_classes.iter().any(|lc| lc.name.0.as_str() == "ViewComponent::Base") {
         return None;
     }
     fn marks(e: &Expr) -> bool {
