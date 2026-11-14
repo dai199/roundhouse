@@ -23,6 +23,20 @@ class SafeString < String
   def +(other)
     SafeString.new(String.new(self) + ActionView::ViewHelpers.html_escape(other))
   end
+
+  # Rails' `SafeBuffer#<<` / `concat`: appended escaped unless it is safe, so the buffer stays what it says.
+  def <<(other)
+    super(ActionView::ViewHelpers.html_escape(other))
+  end
+
+  def concat(other)
+    super(ActionView::ViewHelpers.html_escape(other))
+  end
+
+  # Rails' `safe_concat`: appended as it is.
+  def safe_concat(other)
+    replace(String.new(self) + other.to_s)
+  end
 end
 
 class String
@@ -41,8 +55,9 @@ module ActionView
     def self.html_escape(s)
       text = s.to_s
       return text if text.html_safe?
-      return text + "" unless text.include?("&") || text.include?("<") || text.include?(">") || text.include?("\"") || text.include?("'")
-      text.gsub(HTML_ESCAPE_PATTERN, HTML_ESCAPES)
+      # A safe String, as Rails' is: escaping it again (a `capture` of an escaped value) leaves it as it is.
+      return SafeString.new(text) unless text.include?("&") || text.include?("<") || text.include?(">") || text.include?("\"") || text.include?("'")
+      SafeString.new(text.gsub(HTML_ESCAPE_PATTERN, HTML_ESCAPES))
     end
 
     def self.raw(value)
@@ -54,8 +69,10 @@ module ActionView
     # Rails' `capture`: the block's value, a String escaped unless it is html_safe.
     def capture(*args)
       value = yield(*args)
+      # Rails 7.2 takes an OutputBuffer's text as it is (already safe).
+      return SafeString.new(value.to_s) if value.is_a?(ActionView::OutputBuffer)
       return nil unless value.is_a?(String)
-      ActionView::ViewHelpers.html_escape(value).html_safe
+      ActionView::ViewHelpers.html_escape(value)
     end
   end
 end
