@@ -87,11 +87,10 @@ module ActionView
     end
 
     # ERB::Util's `html_escape`, which Rails' view includes (view_component's `maybe_escape_html` calls it bare).
+    # Not ERB::Util's check of a safe String first, which no typed String answers here: view_component's one caller
+    # (`maybe_escape_html`) hands it only text that is not html_safe.
     def html_escape(text)
-      value = text.to_s
-      # Not markup already safe: ERB::Util answers a safe String as it is.
-      return value if value.respond_to?(:html_safe?) && value.html_safe?
-      ActionView::ViewHelpers.html_escape(value)
+      ActionView::ViewHelpers.html_escape(text.to_s)
     end
   end
 end
