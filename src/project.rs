@@ -1960,14 +1960,15 @@ fn inject_spinel_active_support_requires(files: &mut Vec<(String, String)>) -> R
         requires.push_str("require_relative \"runtime/ordered_options_spinel\"\n");
         sigs.push("ordered_options_spinel");
     }
-    // Not only a dotted call: a class method calls them bare (`descendants.each`); not a word inside another name.
+    // Not only a dotted call: a class method calls them bare (`descendants.each`); not a word inside another name, nor
+    // an assignment (`descendants = …`), though a comparison (`module_parent == Object`) still calls it.
     let names_bare = |text: &str, name: &str| {
         text.match_indices(name).any(|(at, _)| {
             let before = text[..at].chars().next_back();
             let after = text[at + name.len()..].chars().next();
             before.is_none_or(|c| !(c.is_alphanumeric() || c == '_' || c == '@' || c == ':' || c == '$'))
                 && after.is_none_or(|c| !(c.is_alphanumeric() || c == '_' || c == ':' || c == '?' || c == '!'))
-                && !text[at + name.len()..].trim_start().starts_with('=')
+                && !text[at + name.len()..].trim_start().strip_prefix('=').is_some_and(|rest| !rest.starts_with(['=', '~', '>']))
         })
     };
     if own(&|text| ["descendants", "module_parent", "module_parents", "module_parent_name"].iter().any(|n| names_bare(text, n))) {

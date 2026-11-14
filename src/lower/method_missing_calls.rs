@@ -13,20 +13,6 @@ pub fn apply_method_missing_calls(app: &mut App, registry: &HashMap<ClassId, cra
     if !target.has_runtime_relation() {
         return;
     }
-    // Not `update` on Spinel's OrderedOptions, which defines only `merge!` (Rails' alias): an `update` beside it would type
-    // openssl's `Digest#update` by its Hash (`runtime/spinel/ordered_options_spinel.rb`).
-    if target == crate::build_target::BuildTarget::Spinel {
-        fn rename(e: &mut Expr) {
-            e.node.for_each_child_mut(&mut |c| rename(c));
-            if let ExprNode::Send { recv: Some(r), method, .. } = &mut *e.node
-                && method.as_str() == "update"
-                && matches!(r.ty.as_ref().map(Ty::peel_nilable), Some(Ty::Class { id, .. }) if id.0.as_str() == "ActiveSupport::OrderedOptions")
-            {
-                *method = Symbol::from("merge!");
-            }
-        }
-        crate::lower::for_each_emit_body(app, &mut |body| rename(body));
-    }
     let missing = Symbol::from("method_missing");
     let answers_missing = |id: &ClassId| {
         crate::analyze::diagnostics::method_registered_on(registry, Some(&Ty::Class { id: id.clone(), args: vec![].into() }), &missing)
@@ -38,15 +24,12 @@ pub fn apply_method_missing_calls(app: &mut App, registry: &HashMap<ClassId, cra
         .filter(|c| !c.is_module)
         .map(|c| (c.name.0.as_str().to_string(), c.parent.as_ref().map(|p| p.0.as_str().trim_start_matches("::").to_string())))
         .collect();
-    let core_of = |id: &ClassId| -> &'static [&'static str] {
-        // Not Object's alone for Rails' OrderedOptions, a Hash on the ruby family's tree (Spinel's holds one, and
-        // answers only what its own class defines).
-        if id.0.as_str() == "ActiveSupport::OrderedOptions" && target != crate::build_target::BuildTarget::Spinel {
-            return super::core_instance_methods::HASH;
-        }
+    // The class outside the program each class descends from, by its written parents (`ActiveSupport::OrderedOptions`
+    // for `class Settings < ActiveSupport::OrderedOptions`).
+    let root_of = |id: &ClassId| -> String {
         let mut current = id.0.as_str().to_string();
         for _ in 0..32 {
-            let Some(Some(parent)) = parents.get(&current) else { break };
+            let Some(Some(parent)) = parents.get(&current) else { return current };
             let scope: Vec<&str> = current.split("::").collect();
             let resolved = (0..scope.len())
                 .rev()
@@ -54,18 +37,37 @@ pub fn apply_method_missing_calls(app: &mut App, registry: &HashMap<ClassId, cra
                 .find(|candidate| *candidate != current && parents.contains_key(candidate));
             match resolved {
                 Some(next) => current = next,
-                None => {
-                    return match parent.as_str() {
-                        "Hash" => super::core_instance_methods::HASH,
-                        "Array" => super::core_instance_methods::ARRAY,
-                        "String" => super::core_instance_methods::STRING,
-                        _ => super::core_instance_methods::OBJECT,
-                    };
-                }
+                None => return parent.clone(),
             }
         }
-        super::core_instance_methods::OBJECT
+        "Object".to_string()
     };
+    let ordered_options = |id: &ClassId| root_of(id) == "ActiveSupport::OrderedOptions";
+    let core_of = |id: &ClassId| -> &'static [&'static str] {
+        // Not Object's alone for Rails' OrderedOptions, a Hash on the ruby family's tree (Spinel's holds one, and
+        // answers only what its own class defines).
+        match root_of(id).as_str() {
+            "ActiveSupport::OrderedOptions" if target != crate::build_target::BuildTarget::Spinel => super::core_instance_methods::HASH,
+            "Hash" => super::core_instance_methods::HASH,
+            "Array" => super::core_instance_methods::ARRAY,
+            "String" => super::core_instance_methods::STRING,
+            _ => super::core_instance_methods::OBJECT,
+        }
+    };
+    // Not `update` on Spinel's OrderedOptions, which defines only `merge!` (Rails' alias): an `update` beside it would type
+    // openssl's `Digest#update` by its Hash (`runtime/spinel/ordered_options_spinel.rb`).
+    if target == crate::build_target::BuildTarget::Spinel {
+        fn rename(e: &mut Expr, ordered_options: &dyn Fn(&ClassId) -> bool) {
+            e.node.for_each_child_mut(&mut |c| rename(c, ordered_options));
+            if let ExprNode::Send { recv: Some(r), method, .. } = &mut *e.node
+                && method.as_str() == "update"
+                && matches!(r.ty.as_ref().map(Ty::peel_nilable), Some(Ty::Class { id, .. }) if ordered_options(id))
+            {
+                *method = Symbol::from("merge!");
+            }
+        }
+        crate::lower::for_each_emit_body(app, &mut |body| rename(body, &ordered_options));
+    }
     // The classes whose nearest `method_missing` is private, which an explicit receiver reaches only through `__send__`.
     let private_missing: crate::det::HashSet<String> = {
         let own: HashMap<String, bool> = app
