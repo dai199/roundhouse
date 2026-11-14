@@ -82,6 +82,8 @@ require_relative "runtime/active_support_calendar"
 require_relative "runtime/active_model_validator"
 require_relative "runtime/active_model_name"
 require_relative "runtime/rails"
+# `ActiveSupport::OrderedOptions` as a Hash-holding class: Spinel subclasses no builtin.
+require_relative "runtime/ordered_options_spinel"
 # Not part of runtime/rails: the instrumented Notifications paths keep per-thread state the strict targets' typing gate does not follow.
 require_relative "runtime/active_support_instrumentation"
 # `ActiveSupport::Cache::MemoryStore` (a `Rails::Cache`) and

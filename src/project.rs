@@ -9068,7 +9068,7 @@ fn unavailable_class_module_construct(name: &str, target: &str) -> Option<&'stat
     // Spinel recognizes GeneratorError only as a literal rescue name.
     if target == "spinel" {
         // The Arel ordering and predicate nodes live on the CRuby overlay (`arel_predicates.rb`).
-        if matches!(name, "ActiveSupport::ConfigurationFile" | "ActiveSupport::OrderedOptions" | "Arel::Nodes::Ascending" | "Arel::Nodes::Descending" | "Arel::Nodes::Predicate") {
+        if matches!(name, "ActiveSupport::ConfigurationFile" | "Arel::Nodes::Ascending" | "Arel::Nodes::Descending" | "Arel::Nodes::Predicate") {
             return Some("ruby_family_runtime_constant");
         }
         // `Observable` is `require "observer"`, which `SPINEL_LACKS` keeps
@@ -10745,6 +10745,13 @@ fn spinel_files(app: &App, fixture: &Path, param_binds: bool) -> Result<(Vec<(St
         let rbs = crate::runtime_files::read_to_string("runtime/spinel/action_controller_head.rbs")
             .map_err(|e| format!("read runtime/spinel/action_controller_head.rbs: {e}"))?;
         files.push(("sig/runtime/action_controller_head.rbs".to_string(), rbs));
+    }
+
+    // `ActiveSupport::OrderedOptions` (runtime/ordered_options_spinel.rb), which only spinel's boot.rb loads.
+    {
+        let rbs = crate::runtime_files::read_to_string("runtime/spinel/ordered_options_spinel.rbs")
+            .map_err(|e| format!("read runtime/spinel/ordered_options_spinel.rbs: {e}"))?;
+        files.push(("sig/runtime/ordered_options_spinel.rbs".to_string(), rbs));
     }
 
     // Any flash key (Rails' FlashHash): a Ruby-family and Spinel reopen of the shared Flash.
