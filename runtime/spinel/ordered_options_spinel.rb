@@ -41,7 +41,10 @@ module ActiveSupport
       @values.key?(key)
     end
 
-    def fetch(key)
+    # Hash#fetch's fallbacks: a default, or a block handed the missing key.
+    def fetch(key, *default, &block)
+      return @values.fetch(key, default[0]) unless default.empty?
+      return @values.fetch(key) { |missing| block.call(missing) } unless block.nil?
       @values.fetch(key)
     end
 
@@ -60,7 +63,9 @@ module ActiveSupport
       elsif text.end_with?("!")
         key = text[0, text.length - 1].to_s
         value = self[key]
-        raise KeyError, ":#{key} is blank" if value.nil? || value == false || value == "" || value == [] || value == {}
+        # Rails' `presence`: nil, false, a whitespace-only String and an empty collection are blank.
+        blank = value.nil? || value == false || (value.is_a?(String) && value.strip.empty?) || value == [] || value == {}
+        raise KeyError, ":#{key} is blank" if blank
         value
       else
         self[text]

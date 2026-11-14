@@ -91,10 +91,15 @@ fn spell_static_splats(app: &mut crate::App) {
                     _ => None,
                 })
                 .collect(),
-            // Not any receiver's `merge!`: one a constructor answers, empty until the Hash it is handed.
+            // Not any receiver's `merge!`: a new Hash or OrderedOptions, empty until the Hash it is handed (another
+            // class's `new` may answer keys of its own).
             ExprNode::Send { recv: Some(recv), method, args, block: None, .. }
                 if matches!(method.as_str(), "merge!" | "update")
-                    && matches!(&*recv.node, ExprNode::Send { method, args, .. } if method.as_str() == "new" && args.is_empty()) =>
+                    && matches!(&*recv.node, ExprNode::Send { recv: Some(class), method, args, block: None, .. }
+                        if method.as_str() == "new" && args.is_empty()
+                            && matches!(&*class.node, ExprNode::Const { path }
+                                if matches!(path.iter().map(|p| p.as_str()).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("::").as_str(),
+                                    "Hash" | "ActiveSupport::OrderedOptions"))) =>
             {
                 match args.as_slice() {
                     [hash] => literal_keys(hash),

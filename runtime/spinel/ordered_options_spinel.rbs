@@ -10,7 +10,7 @@ module ActiveSupport
     def update: (Hash[untyped, untyped] other) -> OrderedOptions
     def keys: () -> Array[untyped]
     def key?: (untyped key) -> bool
-    def fetch: (untyped key) -> untyped
+    def fetch: (untyped key, *untyped default) ?{ (untyped) -> untyped } -> untyped
     def to_h: () -> Hash[untyped, untyped]
     def empty?: () -> bool
     def method_missing: (Symbol name, *untyped args) -> untyped
