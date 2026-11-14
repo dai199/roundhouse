@@ -22,6 +22,11 @@ end
 "##)
         .write("app/models/draft.rb", r##"class Draft < ApplicationRecord
   belongs_to :author, optional: true
+  before_destroy :guard
+
+  def guard
+    throw :abort if title == "keep"
+  end
 end
 "##)
         .write("app/models/post.rb", r##"class Post < ApplicationRecord
@@ -74,6 +79,35 @@ end
     end
     check("record not saved", raised)
     check("rolled back", Post.find(first.id).author_id == b.id)
+    # A destroy a callback aborts raises and rolls the replacement back.
+    k = Draft.create!(title: "keep", author: b)
+    aborted = false
+    begin
+      b.drafts = []
+    rescue ActiveRecord::RecordNotDestroyed
+      aborted = true
+    end
+    check("destroy aborted", aborted && Draft.find(k.id).author_id == b.id)
+    # A built record is already in the target, so a replacement that
+    # keeps it leaves it unsaved, and one that leaves it out drops it: the
+    # owner's save doesn't save it.
+    c = Author.create!(name: "c")
+    u = c.posts.build(title: "u")
+    c.posts = [u]
+    check("built kept unsaved", u.new_record? && c.posts.size == 1)
+    c.posts = []
+    c.save!
+    check("built then left out", u.new_record? && Post.where(title: "u").count == 0)
+    # destroy_all after the writer leaves an empty target.
+    c.posts = [Post.new(title: "w")]
+    c.posts.destroy_all
+    check("destroy_all after writer", c.posts.size == 0 && c.posts.to_a.empty?)
+    # A new owner's target is the list it holds, whatever the rows say.
+    other = Post.create!(title: "other", author: b)
+    o2 = Author.new(name: "o2")
+    o2.posts = [other]
+    check("new owner first", o2.posts.first.equal?(other) && o2.posts.last.equal?(other))
+    check("new owner size", o2.posts.size == 1 && !o2.posts.empty? && o2.posts.any? && o2.posts.length == 1)
   end
 end
 "##)
