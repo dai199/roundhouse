@@ -71,6 +71,7 @@ end
     # A record that can't be saved raises and rolls the replacement back.
     b = Author.create!(name: "b")
     first = Post.create!(title: "first", author: b)
+    b.posts = [first]
     raised = false
     begin
       b.posts = [Post.new(title: "")]
@@ -78,7 +79,9 @@ end
       raised = true
     end
     check("record not saved", raised)
-    check("rolled back", Post.find(first.id).author_id == b.id)
+    check("rolled back", Post.find(first.id).author_id == b.id && first.author_id == b.id)
+    first.save!
+    check("rolled back record saves its key", Post.find(first.id).author_id == b.id)
     # A destroy a callback aborts raises and rolls the replacement back.
     k = Draft.create!(title: "keep", author: b)
     aborted = false

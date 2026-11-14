@@ -33,8 +33,8 @@
 //! The writer is Rails' `replace`: on a new owner the records are held,
 //! as pushed ones are. On a persisted owner, in a transaction, each
 //! current record not among them is removed per `dependent:` (destroyed,
-//! deleted, or else its key nulled without callbacks, as Rails' nullify
-//! is), and each new one is pushed (key set, saved), raising
+//! deleted, or else its key nulled in the table without callbacks, as
+//! Rails' nullify is, the loaded record left as it was), and each new one is pushed (key set, saved), raising
 //! `RecordNotSaved` when a save fails. A `dependent: :destroy` removal
 //! is `destroy!`, so a callback's abort raises and rolls it all back. A
 //! built record is already in the target: one the list keeps stays held
@@ -162,10 +162,16 @@ pub(crate) fn expand(app: &mut App) {
                 let remove = match dependent {
                     Dependent::Destroy => "        old.destroy!\n".to_string(),
                     Dependent::Delete | Dependent::DeleteAll => "        old.delete\n".to_string(),
-                    _ => match as_interface {
-                        Some(i) => format!("        old.update_columns({fk}: nil, {i}_type: nil)\n"),
-                        None => format!("        old.update_column(:{fk}, nil)\n"),
-                    },
+                    // Rails nullifies with a scoped `update_all`, leaving the
+                    // loaded record as it was: a rolled-back replacement
+                    // keeps its key, and so does a removed one in memory.
+                    _ => {
+                        let t = target.0.as_str();
+                        match as_interface {
+                            Some(i) => format!("        {t}.where(id: old.id).update_all({fk}: nil, {i}_type: nil)\n"),
+                            None => format!("        {t}.where(id: old.id).update_all({fk}: nil)\n"),
+                        }
+                    }
                 };
                 let writer_src = format!(
                     "  def {n}=(records)\n    if new_record?\n      @__held_{n} = nil\n      records.each {{ |record| __push_{n}(record) }}\n      return records\n    end\n    held = __held_{n}_list\n    current = {n}\n    {owner}.transaction do\n      current.each do |old|\n        next if records.any? {{ |record| record.id == old.id }}\n{remove}      end\n      records.each do |record|\n        next if !record.new_record? && current.any? {{ |old| old.id == record.id }}\n        next if record.new_record? && held.any? {{ |h| h.equal?(record) }}\n        if __push_{n}(record).nil?\n          raise ActiveRecord::RecordNotSaved, \"Failed to replace {n} because one or more of the new records could not be saved.\"\n        end\n      end\n    end\n    kept = held.select {{ |h| h.new_record? && records.any? {{ |record| record.equal?(h) }} }}\n    @__held_{n} = kept.empty? ? nil : kept\n    @{n}_cache = records.dup\n    @{n}_loaded = true\n    records\n  end\nend\n"
