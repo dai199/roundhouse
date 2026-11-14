@@ -2721,7 +2721,7 @@ pub fn mentions_assoc_lookup(expr: &Expr, assocs: &AssocRegistry) -> bool {
                             // Array's `load` is private (Kernel#load), so
                             // `post.comments.load` is a NoMethodError on the
                             // reader's Array too.
-                            | "load" | "load_async" | "from"
+                            | "load" | "load_async" | "from" | "extract_associated"
                     ) && (args.is_empty() || !matches!(method.as_str(), "load" | "load_async")));
             if is_where || method.as_str().starts_with("find_by_") && block.is_none()
                 || is_relation_terminal(method.as_str(), args, block.as_ref())
@@ -2955,6 +2955,37 @@ pub fn mentions_bare_chain_start(expr: &Expr) -> bool {
 ///
 /// `all` is a terminal in the catalog and is checked separately at the
 /// call sites that seed a relation from it.
+/// Rails' `extract_associated(:name)`: `preload(:name).collect(&:name)`,
+/// each owner's reader answering the records the preload installed.
+fn extract_associated(span: crate::span::Span, rel: Expr, args: Vec<Expr>, aname: Symbol) -> Expr {
+    let put = |span, recv, method, args, block, parenthesized| {
+        syn(span, ExprNode::Send { recv, method, args, block, parenthesized })
+    };
+    let preloaded = put(span, Some(rel), Symbol::from("preload"), args, None, true);
+    let rows = put(span, Some(preloaded), Symbol::from("to_a"), vec![], None, false);
+    let owner = Symbol::from("__rh_owner");
+    let read = put(
+        span,
+        Some(syn(span, ExprNode::Var { id: crate::ident::VarId(0), name: owner.clone() })),
+        aname,
+        vec![],
+        None,
+        false,
+    );
+    let block = syn(
+        span,
+        ExprNode::Lambda {
+            extra_params: Vec::new(),
+            rest_param: None,
+            params: vec![owner],
+            block_param: None,
+            body: read,
+            block_style: BlockStyle::Brace,
+        },
+    );
+    put(span, Some(rows), Symbol::from("map"), vec![], Some(block), false)
+}
+
 pub(crate) fn is_relation_chain_method(name: &str) -> bool {
     crate::catalog::is_relation_builder_name(name)
 }
@@ -5365,7 +5396,20 @@ fn rewrite_send(expr: &mut Expr, ctx: &Ctx, locals: &mut Locals) -> Option<Class
                         // the seed is spelled `where_scope`, which records
                         // the foreign key as `scope_attributes` too.
                         let assoc_cm = ctx.assoc_class_method_params(&target, &method);
-                        if is_scope || is_chain || is_term || assoc_cm.is_some() {
+                        // `owner.posts.extract_associated(:author)`: the
+                        // association's relation, preloaded and mapped.
+                        let extracted = match args.as_slice() {
+                            [arg] if method.as_str() == "extract_associated" && block.is_none() => match &*arg.node {
+                                ExprNode::Lit { value: Literal::Sym { value } }
+                                    if ctx.assocs.assoc_target(&target, value).is_some() =>
+                                {
+                                    Some(value.clone())
+                                }
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        if is_scope || is_chain || is_term || assoc_cm.is_some() || extracted.is_some() {
                             let seed = build_association_seed(
                                 span, &target, fk, owner_id, type_entry.clone(), ir, aname,
                                 assoc_cm.is_some(),
@@ -5404,6 +5448,10 @@ fn rewrite_send(expr: &mut Expr, ctx: &Ctx, locals: &mut Locals) -> Option<Class
                                     None,
                                     true,
                                 );
+                                return None;
+                            }
+                            if let Some(aname) = extracted {
+                                *expr = extract_associated(span, seed, args, aname);
                                 return None;
                             }
                             if is_scope {
@@ -5604,29 +5652,7 @@ fn rewrite_send(expr: &mut Expr, ctx: &Ctx, locals: &mut Locals) -> Option<Class
                     && ctx.assocs.assoc_target(&mr, aname).is_some()
                 {
                     let aname = aname.clone();
-                    let preloaded = put(span, Some(r), Symbol::from("preload"), args, None, true);
-                    let rows = put(span, Some(preloaded), Symbol::from("to_a"), vec![], None, false);
-                    let owner = Symbol::from("__rh_owner");
-                    let read = put(
-                        span,
-                        Some(syn(span, ExprNode::Var { id: crate::ident::VarId(0), name: owner.clone() })),
-                        aname,
-                        vec![],
-                        None,
-                        false,
-                    );
-                    let block = syn(
-                        span,
-                        ExprNode::Lambda {
-                            extra_params: Vec::new(),
-                            rest_param: None,
-                            params: vec![owner],
-                            block_param: None,
-                            body: read,
-                            block_style: BlockStyle::Brace,
-                        },
-                    );
-                    *expr = put(span, Some(rows), Symbol::from("map"), vec![], Some(block), false);
+                    *expr = extract_associated(span, r, args, aname);
                     return None;
                 }
                 if let Some(counted) = counted_terminal(&method, &args, block.as_ref()) {

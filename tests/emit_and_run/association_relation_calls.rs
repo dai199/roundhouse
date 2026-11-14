@@ -48,6 +48,13 @@ end
     Author.order(:id).extract_associated(:posts).map { |ps| ps.map(&:title).sort }
   end
 
+  # Rails: [["a", "a"], ["b"]]
+  def self.extract_associated_through_a_has_many
+    a = Author.create!(name: "a"); b = Author.create!(name: "b"); Post.create!(title: "1", author: a); Post.create!(title: "3", author: a)
+    Post.create!(title: "2", author: b)
+    [a.posts.extract_associated(:author).map(&:name), b.posts.extract_associated(:author).map(&:name)]
+  end
+
   def self.run
     reset
     check("sum_on_association_ignores_unsaved", sum_on_association_ignores_unsaved == [10, 10, 10])
@@ -55,6 +62,8 @@ end
     check("from_on_has_many", from_on_has_many == ["t"])
     reset
     check("extract_associated", extract_associated == [["1", "3"], ["2"]])
+    reset
+    check("extract_associated_through_a_has_many", extract_associated_through_a_has_many == [["a", "a"], ["b"]])
   end
 end
 "##)
