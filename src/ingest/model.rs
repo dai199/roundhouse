@@ -4112,7 +4112,9 @@ fn parse_association(
                 };
                 if param_free {
                     scope = lambda.body().and_then(|b| ingest_expr(&b, file).ok());
-                } else {
+                } else if matches!(method, "belongs_to" | "has_one" | "has_many" | "has_and_belongs_to_many") {
+                    // Every macro passes through here (`scope :x, ->(k) { … }`
+                    // too); only an association's lambda is its scope.
                     let mut diagnostic = crate::diagnostic::Diagnostic::unsupported(
                         super::util::node_span(&arg, file),
                         None,
