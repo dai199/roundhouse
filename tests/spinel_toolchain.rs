@@ -78,6 +78,10 @@ mod conditional_definitions;
 mod ordered_options_app;
 #[path = "spinel_toolchain/ordered_options.rs"]
 mod ordered_options;
+#[path = "support/class_ext_app.rs"]
+mod class_ext_app;
+#[path = "spinel_toolchain/class_ext.rs"]
+mod class_ext;
 #[path = "support/class_attribute.rs"]
 mod class_attribute;
 #[path = "support/class_configuration.rs"]

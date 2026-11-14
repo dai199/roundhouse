@@ -84,6 +84,8 @@ require_relative "runtime/active_model_name"
 require_relative "runtime/rails"
 # `ActiveSupport::OrderedOptions` as a Hash-holding class: Spinel subclasses no builtin.
 require_relative "runtime/ordered_options_spinel"
+# `Class#descendants` and `module_parents`, ActiveSupport's, on `Class`: Spinel answers no reopened `Module` method on a class.
+require_relative "runtime/class_ext_spinel"
 # Not part of runtime/rails: the instrumented Notifications paths keep per-thread state the strict targets' typing gate does not follow.
 require_relative "runtime/active_support_instrumentation"
 # `ActiveSupport::Cache::MemoryStore` (a `Rails::Cache`) and

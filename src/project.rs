@@ -10769,6 +10769,13 @@ fn spinel_files(app: &App, fixture: &Path, param_binds: bool) -> Result<(Vec<(St
         files.push(("sig/runtime/action_controller_head.rbs".to_string(), rbs));
     }
 
+    // `Class#descendants` / `module_parents` (runtime/class_ext_spinel.rb), which only spinel's boot.rb loads.
+    {
+        let rbs = crate::runtime_files::read_to_string("runtime/spinel/class_ext_spinel.rbs")
+            .map_err(|e| format!("read runtime/spinel/class_ext_spinel.rbs: {e}"))?;
+        files.push(("sig/runtime/class_ext_spinel.rbs".to_string(), rbs));
+    }
+
     // `ActiveSupport::OrderedOptions` (runtime/ordered_options_spinel.rb), which only spinel's boot.rb loads.
     {
         let rbs = crate::runtime_files::read_to_string("runtime/spinel/ordered_options_spinel.rbs")
