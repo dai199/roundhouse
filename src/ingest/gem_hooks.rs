@@ -1363,10 +1363,12 @@ fn compile_components<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V) {
                     lc.include_spans.insert(0, crate::span::Span::synthetic());
                 }
                 view_component_slots(app, vfs, &path, class);
-                let answered = translations_answered(app, class);
+                let instance = translations_answered(app, class, crate::dialect::MethodReceiver::Instance);
+                let singleton = translations_answered(app, class, crate::dialect::MethodReceiver::Class);
                 for lc in app.library_classes.iter().filter(|c| &c.name == class) {
                     for m in &lc.methods {
-                        report_component_translations(&m.body, &answered);
+                        let answered = if m.receiver == crate::dialect::MethodReceiver::Class { &singleton } else { &instance };
+                        report_component_translations(&m.body, answered);
                     }
                 }
             }
@@ -1384,7 +1386,7 @@ fn compile_components<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V) {
             if !renders_as_component(app, class) {
                 continue;
             }
-            let answered_here = translations_answered(app, class);
+            let answered_here = translations_answered(app, class, crate::dialect::MethodReceiver::Instance);
             let Some(lc) = app.library_classes.iter_mut().find(|c| &c.name == class) else { continue };
             if lc.methods.iter().any(|m| m.name.as_str() == "call" && m.receiver == crate::dialect::MethodReceiver::Instance) {
                 continue;
@@ -1418,8 +1420,8 @@ fn synthetic_constants(e: &mut Expr) {
 /// A component's `t` / `translate`, which the hook answers with a raise: the gem's per-component I18n backend (sidecar
 /// `*.yml` loaded into an `I18n::Backend::Simple` subclass) is not modelled.
 /// Which of `t` / `translate` a component's own lineage answers below `ViewComponent::Base` (its own class, an
-/// `ApplicationComponent` it extends), each apart: one does not answer the other's calls.
-fn translations_answered(app: &App, class: &crate::ident::ClassId) -> Vec<&'static str> {
+/// `ApplicationComponent` it extends) on `receiver`'s side, each apart: one does not answer the other's calls.
+fn translations_answered(app: &App, class: &crate::ident::ClassId, receiver: crate::dialect::MethodReceiver) -> Vec<&'static str> {
     let mut answered = Vec::new();
     let mut current = Some(class.clone());
     for _ in 0..32 {
@@ -1430,7 +1432,7 @@ fn translations_answered(app: &App, class: &crate::ident::ClassId) -> Vec<&'stat
         let mut parent = None;
         for c in app.library_classes.iter().filter(|c| c.name == name) {
             for method in ["t", "translate"] {
-                if c.methods.iter().any(|m| m.receiver == crate::dialect::MethodReceiver::Instance && m.name.as_str() == method) && !answered.contains(&method) {
+                if c.methods.iter().any(|m| m.receiver == receiver && m.name.as_str() == method) && !answered.contains(&method) {
                     answered.push(method);
                 }
             }
