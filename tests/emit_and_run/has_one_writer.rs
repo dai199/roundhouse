@@ -24,6 +24,11 @@ end
 "##)
         .write("app/models/badge.rb", r##"class Badge < ApplicationRecord
   belongs_to :author
+  validate :label_allowed
+
+  def label_allowed
+    errors.add(:label, "is not allowed") if label == "bad"
+  end
 end
 "##)
         .write("app/models/card.rb", r##"class Card < ApplicationRecord
@@ -91,6 +96,20 @@ end
       raised = true
     end
     check("record not saved", raised)
+    # The failure rolls the removal back: the old record keeps its key and
+    # stays the target, and a destroyed one stays in the table.
+    check("old profile kept", Profile.find(q.id).author_id == a.id && q.author_id == a.id && a.profile.equal?(q))
+    kept = a.badge
+    raised = false
+    begin
+      a.badge = Badge.new(label: "bad")
+    rescue StandardError
+      # Rails 8.1.4 raises FrozenError here: its failure path writes the
+      # key back onto the destroyed record. Either way the replacement
+      # is rolled back.
+      raised = true
+    end
+    check("old badge kept", raised && Badge.exists?(kept.id) && a.badge.equal?(kept))
     # A required belongs_to can't take the nulled key: replacing raises,
     # and the old record keeps its key.
     a.card = Card.new
@@ -121,6 +140,7 @@ end
   end
   create_table "badges", force: :cascade do |t|
     t.integer "author_id"
+    t.string "label"
   end
   create_table "cards", force: :cascade do |t|
     t.integer "author_id"
@@ -144,4 +164,31 @@ fn a_has_one_writer_replaces_as_rails_does_on_spinel() {
     let run = app().run_spinel_with_db(SCRIPT);
     run.assert_passes();
     assert!(run.stdout.contains("probe passed"), "{}", run.stdout);
+}
+
+/// A has_one that only `db/seeds.rb` assigns gets the writer too.
+fn seeded_app() -> emit_and_run::Overlay {
+    emit_and_run::empty_app()
+        .write("app/models/application_record.rb", "class ApplicationRecord < ActiveRecord::Base\n  self.abstract_class = true\nend\n")
+        .write("app/models/author.rb", "class Author < ApplicationRecord\n  has_one :card\nend\n")
+        .write("app/models/card.rb", "class Card < ApplicationRecord\n  belongs_to :author\nend\n")
+        .write("db/seeds.rb", "author = Author.create!(name: \"s\")\nauthor.card = Card.new\n")
+        .write("db/schema.rb", "ActiveRecord::Schema.define do\n  create_table \"authors\", force: :cascade do |t|\n    t.string \"name\"\n  end\n  create_table \"cards\", force: :cascade do |t|\n    t.integer \"author_id\"\n  end\nend\n")
+}
+
+const SEEDED: &str = "require File.expand_path(\"db/seeds\", Dir.pwd)\nSeeds.run\nraise \"card not saved\" unless Card.count == 1 && Card.first.author_id == Author.first.id\nputs \"seeded\"\n";
+
+#[test]
+fn a_has_one_only_seeds_assign_gets_the_writer() {
+    let run = seeded_app().run_ruby(SEEDED);
+    run.assert_passes();
+    assert!(run.stdout.contains("seeded"), "{}", run.stdout);
+}
+
+#[test]
+#[ignore = "requires the Spinel toolchain"]
+fn a_has_one_only_seeds_assign_gets_the_writer_on_spinel() {
+    let run = seeded_app().run_spinel_with_db(SEEDED);
+    run.assert_passes();
+    assert!(run.stdout.contains("seeded"), "{}", run.stdout);
 }

@@ -8,6 +8,9 @@
 //!   polymorphic name), its `belongs_to` inverse is set to the owner, and
 //!   it is saved, raising `RecordNotSaved` when the save fails.
 //!
+//! The removal and the save are one transaction, so a failed save
+//! leaves the old record as it was, in the table and as the target.
+//!
 //! On a new owner the record is held, with its inverse set, and saved
 //! with the owner's key after the owner saves (`save_has_one_association`).
 //!
@@ -34,7 +37,8 @@ use crate::app::App;
 use crate::dialect::{Association, Dependent, ModelBodyItem};
 use crate::expr::{Expr, ExprNode, LValue};
 
-/// The names app code assigns through a writer (`x.profile = v`).
+/// The names app code (seeds included) assigns through a writer
+/// (`x.profile = v`).
 pub(super) fn assigned_names(app: &App) -> BTreeSet<String> {
     fn walk(e: &Expr, out: &mut BTreeSet<String>) {
         match &*e.node {
@@ -65,6 +69,9 @@ pub(super) fn assigned_names(app: &App) -> BTreeSet<String> {
     }
     for view in &app.views {
         walk(&view.body, &mut out);
+    }
+    if let Some(seeds) = &app.seeds {
+        walk(seeds, &mut out);
     }
     out
 }
@@ -140,6 +147,17 @@ pub(crate) fn expand(app: &mut App) {
                 Some(bt) => format!("        record.{bt} = self\n"),
                 None => String::new(),
             };
+            // A failed save of the new record restores, in memory, what the
+            // rolled-back transaction restores in the table: the old
+            // record's key (Rails' `set_owner_attributes(target)`), and the
+            // new one's nulled (`nullify_owner_attributes`).
+            let restore_old = match dependent {
+                Dependent::Destroy | Dependent::Delete => String::new(),
+                _ => format!(
+                    "            unless old.nil?\n              old.{fk} = id\n{}            end\n",
+                    set_type("              old", &format!("\"{}\"", model.name.0.as_str())),
+                ),
+            };
             let remove_old = match dependent {
                 Dependent::Destroy => "          old.destroy\n".to_string(),
                 Dependent::Delete => "          old.delete\n".to_string(),
@@ -153,8 +171,9 @@ pub(crate) fn expand(app: &mut App) {
                 ),
             };
             let src = format!(
-                "class Generated\n  def {n}=(record)\n    old = {n}\n    unless old.equal?(record)\n      if persisted?\n        unless old.nil?\n{remove_old}        end\n        unless record.nil?\n{set_inverse}          record.{fk} = id\n{set_type_rec}          unless record.save\n            raise ActiveRecord::RecordNotSaved, \"Failed to save the new associated {n}.\"\n          end\n        end\n      else\n        unless record.nil?\n{set_inverse}{set_type_rec}        end\n        @__written_{n} = true\n      end\n    end\n    @{n}_cache = record\n    @{n}_loaded = true\n    record\n  end\n\n  def __written_{n}_save\n    return unless @__written_{n}\n    @__written_{n} = false\n    record = @{n}_cache\n    return if record.nil?\n    record.{fk} = id\n{set_type_rec}    record.save\n  end\n\n  after_save :__written_{n}_save\nend\n",
+                "class Generated\n  def {n}=(record)\n    old = {n}\n    unless old.equal?(record)\n      if persisted?\n        {owner}.transaction do\n        unless old.nil?\n{remove_old}        end\n        unless record.nil?\n{set_inverse}          record.{fk} = id\n{set_type_rec}          unless record.save\n            record.{fk} = nil\n{set_type_nil}{restore_old}            raise ActiveRecord::RecordNotSaved, \"Failed to save the new associated {n}.\"\n          end\n        end\n        end\n      else\n        unless record.nil?\n{set_inverse}{set_type_rec}        end\n        @__written_{n} = true\n      end\n    end\n    @{n}_cache = record\n    @{n}_loaded = true\n    record\n  end\n\n  def __written_{n}_save\n    return unless @__written_{n}\n    @__written_{n} = false\n    record = @{n}_cache\n    return if record.nil?\n    record.{fk} = id\n{set_type_rec}    record.save\n  end\n\n  after_save :__written_{n}_save\nend\n",
                 set_type_rec = set_type("          record", &format!("\"{owner}\"")),
+                set_type_nil = set_type("            record", "nil"),
             );
             if let Some(mut items) = super::validates_with::ingest_source(&src, &model.name) {
                 // The association's own accessor, not an app def overriding it
