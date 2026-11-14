@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use super::super::EmittedFile;
 use crate::App;
 use crate::dialect::{AccessorKind, LibraryClass, LibraryClassOrigin, MethodDef, MethodReceiver, MethodVisibility};
-use crate::expr::{Expr, ExprNode, LValue, Literal};
+use crate::expr::{Expr, ExprNode, LValue, Literal, Pattern};
 use crate::ident::{ClassId, Symbol, VarId};
 use crate::span::Span;
 use crate::lower::view_to_library::hoist_constants::{hoist_pure_helper_constants, is_view_helpers_const};
@@ -2421,11 +2421,40 @@ pub(crate) fn apply_belongs_to_memoization(lcs: &mut [LibraryClass], app: &App) 
             })
             .collect();
         for (name, fk) in names {
+            // The reader carries the cache guard only where the preload
+            // lowering ran (an app with `includes`); without it the reader
+            // re-queried after a writer, a has_one's inverse or a preload
+            // had installed the target. A model's own reader is its own.
+            if !model.methods().any(|m| m.name == name && m.receiver == MethodReceiver::Instance) {
+                ensure_cache_guard(lc, &name);
+            }
             memoize_reader(lc, &name);
             invalidate_on_fk_write(lc, &name, &fk);
             invalidate_on_assoc_write(lc, &name, &fk);
         }
     }
+}
+
+/// `body` -> `Seq[return @cache if @loaded, body]`, unless it opens
+/// with that guard already.
+fn ensure_cache_guard(lc: &mut LibraryClass, name: &Symbol) {
+    let loaded = Symbol::from(format!("{}_loaded", name.as_str()));
+    let Some(m) = lc
+        .methods
+        .iter_mut()
+        .find(|m| &m.name == name && m.receiver == MethodReceiver::Instance)
+    else {
+        return;
+    };
+    if let ExprNode::Seq { exprs } = &*m.body.node {
+        if exprs.first().is_some_and(|e| matches!(&*e.node,
+            ExprNode::If { cond, .. } if matches!(&*cond.node, ExprNode::Ivar { name } if name == &loaded)))
+        {
+            return;
+        }
+    }
+    let old = std::mem::replace(&mut m.body, Expr::new(Span::synthetic(), ExprNode::Seq { exprs: vec![] }));
+    m.body = Expr::new(Span::synthetic(), ExprNode::Seq { exprs: vec![preload_cache_guard(name), old] });
 }
 
 /// `Seq[guard, query]` -> `Seq[guard, @cache = query, @loaded = true, @cache]`.
@@ -2522,30 +2551,83 @@ fn invalidate_on_assoc_write(lc: &mut LibraryClass, name: &Symbol, fk: &Symbol) 
     m.body = Expr::new(span, ExprNode::Seq { exprs: stmts });
 }
 
-/// `def <fk>=(value); @<fk> = value; end` gains `@<name>_loaded = false`.
+/// `def <fk>=(value); @<fk> = value; end` drops the loaded target when the
+/// key changes, and so does the `[]=` arm for the key (`self[:<fk>] = v`,
+/// `write_attribute`). Rails' reader compares the key with the one it loaded
+/// the target under (`stale_state`), so writing the key the target already
+/// has keeps it: a has_one writer's inverse, then its key, holds.
 fn invalidate_on_fk_write(lc: &mut LibraryClass, name: &Symbol, fk: &Symbol) {
     let writer = Symbol::from(format!("{}=", fk.as_str()));
-    let Some(m) = lc
+    if let Some(m) = lc
         .methods
         .iter_mut()
         .find(|m| m.name == writer && m.receiver == MethodReceiver::Instance)
+    {
+        m.body = keep_target_unless_key_changes(&m.body, name, fk);
+    }
+    let Some(index) = lc
+        .methods
+        .iter_mut()
+        .find(|m| m.name.as_str() == "[]=" && m.receiver == MethodReceiver::Instance)
     else {
         return;
     };
-    let span = m.body.span;
+    if let ExprNode::Case { arms, .. } = &mut *index.body.node {
+        for arm in arms.iter_mut() {
+            if matches!(&arm.pattern, Pattern::Lit { value: Literal::Sym { value } } if value == fk) {
+                arm.body = keep_target_unless_key_changes(&arm.body, name, fk);
+            }
+        }
+    }
+}
+
+/// `was = @<fk>; written = <write>; @<name>_loaded = @<fk> == was && @<name>_loaded; written`
+fn keep_target_unless_key_changes(write: &Expr, name: &Symbol, fk: &Symbol) -> Expr {
+    let span = write.span;
+    let was = Symbol::from(format!("__rh_{}_was", fk.as_str()));
+    let fk_read = || Expr::new(span, ExprNode::Ivar { name: fk.clone() });
+    let loaded = Symbol::from(format!("{}_loaded", name.as_str()));
+    let remember = Expr::new(
+        span,
+        ExprNode::Assign { target: LValue::Var { id: VarId(0), name: was.clone() }, value: fk_read() },
+    );
+    let unchanged = Expr::new(
+        span,
+        ExprNode::Send {
+            recv: Some(fk_read()),
+            method: Symbol::from("=="),
+            args: vec![Expr::new(span, ExprNode::Var { id: VarId(0), name: was })],
+            block: None,
+            parenthesized: false,
+        },
+    );
     let reset = Expr::new(
         span,
         ExprNode::Assign {
-            target: LValue::Ivar { name: Symbol::from(format!("{}_loaded", name.as_str())) },
-            value: Expr::new(span, ExprNode::Lit { value: Literal::Bool { value: false } }),
+            target: LValue::Ivar { name: loaded.clone() },
+            value: Expr::new(
+                span,
+                ExprNode::BoolOp {
+                    op: crate::expr::BoolOpKind::And,
+                    surface: Default::default(),
+                    left: unchanged,
+                    right: Expr::new(span, ExprNode::Ivar { name: loaded }),
+                },
+            ),
         },
     );
-    let mut stmts = match &*m.body.node {
+    let mut stmts = match &*write.node {
         ExprNode::Seq { exprs } => exprs.clone(),
-        _ => vec![m.body.clone()],
+        _ => vec![write.clone()],
     };
-    stmts.insert(0, reset);
-    m.body = Expr::new(span, ExprNode::Seq { exprs: stmts });
+    // The write's own answer stays the method's (`x.author_id = 3` is 3).
+    let result = Symbol::from("__rh_written");
+    let last = stmts.pop().unwrap_or_else(|| Expr::new(span, ExprNode::Lit { value: Literal::Nil }));
+    stmts.insert(0, remember);
+    stmts.push(Expr::new(span, ExprNode::Assign { target: LValue::Var { id: VarId(0), name: result.clone() }, value: last }));
+    stmts.push(reset);
+    stmts.push(Expr::new(span, ExprNode::Var { id: VarId(0), name: result }));
+    Expr::new(span, ExprNode::Seq { exprs: stmts })
 }
 
 /// Ruby-family pre-emit pass: an STI row hydrates as its SUBCLASS.
@@ -12304,15 +12386,24 @@ fn preload_methods_source(model: &crate::dialect::Model, app: &App) -> String {
     // Batch loaders + belongs_to cache setters.
     for (name, kind) in &targets {
         match kind {
+            // A record whose target is already loaded keeps it (Rails'
+            // preloader skips a loaded association); the batch loads the
+            // rest and answers both for the next level.
             PreloadKind::BelongsTo { fk, target, table, key_list } => {
                 let _ = write!(
                     src,
                     r#"
 def self._preload_batch_{name}(records)
   ids = []
+  kept = []
   records.each do |r|
-    v = r.{fk}
-    ids << v unless v.nil? || v == 0
+    if r.{name}_loaded?
+      held = r.{name}
+      kept << held unless held.nil?
+    else
+      v = r.{fk}
+      ids << v unless v.nil? || v == 0
+    end
   end
   ids.uniq!
   by_id = {{}}
@@ -12322,9 +12413,9 @@ def self._preload_batch_{name}(records)
     end
   end
   records.each do |r|
-    r._preload_{name}(by_id[r.{fk}])
+    r._preload_{name}(by_id[r.{fk}]) unless r.{name}_loaded?
   end
-  by_id.values
+  by_id.values + kept
 end
 
 def _preload_{name}(rec)

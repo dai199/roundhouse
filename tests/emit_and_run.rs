@@ -22221,3 +22221,5 @@ mod param_default_constant_rooting;
 mod compiled_rooted_constants;
 #[path = "emit_and_run/serializable_resource_as_json.rs"]
 mod serializable_resource_as_json;
+#[path = "emit_and_run/belongs_to_target.rs"]
+mod belongs_to_target;
