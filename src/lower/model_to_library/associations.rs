@@ -1666,6 +1666,20 @@ pub(in crate::lower::model_to_library) fn clear_loaded_flag_assigns(
                 value: lit_bool(false),
             },
         ));
+        // And what a has_many holds, built on or pushed onto it
+        // (`ingest::has_many_hold`): Rails' reload resets the target, the
+        // unsaved records with it.
+        if matches!(assoc, Association::HasMany { .. })
+            && model.methods().any(|m| m.name.as_str() == format!("__hold_{}", name.as_str()))
+        {
+            out.push(Expr::new(
+                Span::synthetic(),
+                ExprNode::Assign {
+                    target: LValue::Ivar { name: Symbol::from(format!("__held_{}", name.as_str())) },
+                    value: Expr::new(Span::synthetic(), ExprNode::Lit { value: crate::expr::Literal::Nil }),
+                },
+            ));
+        }
     }
     out
 }

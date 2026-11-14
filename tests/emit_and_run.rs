@@ -22227,3 +22227,7 @@ mod belongs_to_target;
 mod has_one_writer;
 #[path = "emit_and_run/has_one_validate.rs"]
 mod has_one_validate;
+#[path = "emit_and_run/has_many_target.rs"]
+mod has_many_target;
+#[path = "emit_and_run/has_many_writer.rs"]
+mod has_many_writer;

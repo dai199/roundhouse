@@ -5376,6 +5376,28 @@ fn rewrite_send(expr: &mut Expr, ctx: &Ctx, locals: &mut Locals) -> Option<Class
                                 // a record, not a relation.
                                 return None;
                             }
+                            // A collection terminal on a model that holds
+                            // what is built on it answers the held records
+                            // too (`ingest::has_many_hold`'s `__<name>_<terminal>`).
+                            if held
+                                && is_term
+                                && args.is_empty()
+                                && block.is_none()
+                                && matches!(
+                                    method.as_str(),
+                                    "first" | "last" | "size" | "length" | "empty?" | "any?" | "destroy_all"
+                                )
+                            {
+                                *expr = put(
+                                    span,
+                                    Some(ir.clone()),
+                                    Symbol::from(format!("__{aname}_{method}")),
+                                    vec![seed],
+                                    None,
+                                    true,
+                                );
+                                return None;
+                            }
                             if is_scope {
                                 let leading = ctx.scope_params(&target, &method);
                                 let keeps = ctx.scope_keeps_relation(&target, &method);
