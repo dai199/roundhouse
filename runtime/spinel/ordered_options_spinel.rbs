@@ -8,7 +8,7 @@ module ActiveSupport
     def []: (String | Symbol key) -> untyped
     def dig: (String | Symbol key, *untyped rest) -> untyped
     def []=: (String | Symbol key, untyped value) -> untyped
-    def merge!: (Hash[untyped, untyped] other) -> OrderedOptions
+    def merge!: (Hash[untyped, untyped] | OrderedOptions other) -> OrderedOptions
     def keys: () -> Array[untyped]
     def key?: (untyped key) -> bool
     def fetch: (untyped key, *untyped default) ?{ (untyped) -> untyped } -> untyped

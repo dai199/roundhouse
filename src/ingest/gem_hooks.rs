@@ -1355,7 +1355,11 @@ fn compile_components<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V) {
         for class in &names {
             if renders_as_component(app, class) {
                 view_component_slots(app, vfs, &path, class);
-                for lc in app.library_classes.iter().filter(|c| &c.name == class) {
+                // Not a component's own `t` / `translate`, which answers its calls instead of the gem's.
+                let own_translation = app.library_classes.iter().filter(|c| &c.name == class).any(|c| {
+                    c.methods.iter().any(|m| m.receiver == crate::dialect::MethodReceiver::Instance && matches!(m.name.as_str(), "t" | "translate"))
+                });
+                for lc in app.library_classes.iter().filter(|c| &c.name == class && !own_translation) {
                     for m in &lc.methods {
                         report_component_translations(&m.body);
                     }
@@ -1383,7 +1387,9 @@ fn compile_components<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V) {
             let (compiled, map) = crate::erb::compile_erb_mapped(&source);
             let Ok(mut body) = super::expr::ingest_ruby_program(&compiled, &template) else { continue };
             crate::erb::translate_spans(&mut body, &map);
-            report_component_translations(&body);
+            if !lc.methods.iter().any(|m| m.receiver == crate::dialect::MethodReceiver::Instance && matches!(m.name.as_str(), "t" | "translate")) {
+                report_component_translations(&body);
+            }
             // Not its own file's: one outside the app's `app/components` (a gem's) was not registered before the index.
             if late {
                 synthetic_constants(&mut body);

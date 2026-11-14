@@ -37,7 +37,8 @@ module ActiveSupport
     # Hash#merge!: the keys as given, as Rails' does (only `[]=` symbolizes). Not `update` beside it: Spinel types a
     # method by every class that defines its name, and openssl's `Digest#update` is handed a String.
     def merge!(other)
-      other.each { |key, value| @values[key] = value }
+      source = other.is_a?(OrderedOptions) ? other.to_h : other
+      source.each { |key, value| @values[key] = value }
       self
     end
 

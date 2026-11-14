@@ -149,6 +149,31 @@ fn spell_static_splats(app: &mut crate::App) {
             _ => None,
         }
     };
+    // Not a method's values taken as inert: `{ foo: Audit.record }` runs as the declaration is read, so the call that
+    // answered the names still runs there, for whatever else it does.
+    fn calls_anything(e: &Expr) -> bool {
+        let mut found = matches!(&*e.node, ExprNode::Send { .. } | ExprNode::Super { .. } | ExprNode::Yield { .. });
+        e.node.for_each_child(&mut |c| found = found || calls_anything(c));
+        found
+    }
+    let evaluation = |app: &crate::App, e: &Expr| -> Option<Expr> {
+        let ExprNode::Send { recv: Some(recv), method, .. } = &*e.node else { return None };
+        if method.as_str() != "keys" {
+            return None;
+        }
+        let ExprNode::Send { recv: Some(owner), method: reader, .. } = &*recv.node else { return None };
+        let ExprNode::Const { path } = &*owner.node else { return None };
+        let name = path.iter().map(|p| p.as_str()).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("::");
+        let body = app.library_classes.iter().filter(|c| c.name.0.as_str() == name).find_map(|c| {
+            c.methods.iter().find(|m| m.receiver == crate::dialect::MethodReceiver::Class && &m.name == reader)
+        })?;
+        let inert = match &*body.body.node {
+            ExprNode::Hash { entries, .. } => entries.iter().all(|(_, v)| !calls_anything(v)),
+            _ => false,
+        };
+        (!inert).then(|| recv.clone())
+    };
+    let mut evaluations: Vec<(usize, usize, Expr)> = Vec::new();
     let mut spelled: Vec<(usize, usize, usize, Vec<crate::ident::Symbol>)> = Vec::new();
     for (ci, lc) in app.library_classes.iter().enumerate() {
         for (ui, call) in lc.unknown_calls.iter().enumerate() {
@@ -160,6 +185,9 @@ fn spell_static_splats(app: &mut crate::App) {
                 if let ExprNode::Splat { value } = &*arg.node
                     && let Some(names) = names_of(app, value)
                 {
+                    if let Some(run) = evaluation(app, value) {
+                        evaluations.push((ci, ui, run));
+                    }
                     spelled.push((ci, ui, ai, names));
                 }
             }
@@ -171,6 +199,9 @@ fn spell_static_splats(app: &mut crate::App) {
         let span = args[ai].span;
         let literals: Vec<Expr> = names.into_iter().map(|value| Expr::new(span, ExprNode::Lit { value: Literal::Sym { value } })).collect();
         args.splice(ai..=ai, literals);
+    }
+    for (ci, ui, run) in evaluations.into_iter().rev() {
+        app.library_classes[ci].unknown_calls.insert(ui, run);
     }
 }
 
