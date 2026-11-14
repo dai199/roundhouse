@@ -4340,6 +4340,7 @@ fn parse_association(
             touch,
             foreign_type: None,
             primary_key: primary_key.as_deref().map(Symbol::from),
+            scope,
         }),
         "has_and_belongs_to_many" => Some(Association::HasAndBelongsToMany {
             name: name.clone(),

@@ -22231,3 +22231,5 @@ mod has_one_validate;
 mod has_many_target;
 #[path = "emit_and_run/has_many_writer.rs"]
 mod has_many_writer;
+#[path = "emit_and_run/association_scopes.rs"]
+mod association_scopes;

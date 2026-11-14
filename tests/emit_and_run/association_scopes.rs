@@ -1,0 +1,138 @@
+//! An association's scope applies wherever it's read: a has_many lambda
+//! that calls a named scope (`-> { long }`), a scoped `belongs_to`'s
+//! reader and its preload (which keeps the lazy, scoped reader), and a
+//! `through:` hop whose association is scoped (`where(<hop table>: ...)`).
+//! The probe's expected values are ActiveRecord 8.1.4's answers.
+
+use super::emit_and_run;
+use roundhouse::build_target::BuildTarget;
+
+fn app() -> emit_and_run::Overlay {
+    emit_and_run::empty_app()
+        .write("app/models/application_record.rb", r##"class ApplicationRecord < ActiveRecord::Base
+  self.abstract_class = true
+end
+"##)
+        .write("app/models/author.rb", r##"class Author < ApplicationRecord
+  has_many :posts
+  has_many :published_posts, -> { where(published: true) }, class_name: "Post"
+  has_many :long_posts, -> { long }, class_name: "Post"
+  has_many :published_comments, through: :published_posts, source: :comments
+end
+"##)
+        .write("app/models/comment.rb", r##"class Comment < ApplicationRecord
+  belongs_to :post
+end
+"##)
+        .write("app/models/post.rb", r##"class Post < ApplicationRecord
+  belongs_to :author, optional: true
+  belongs_to :live_author, -> { where(active: true) }, class_name: "Author", foreign_key: :author_id, optional: true
+  has_many :comments
+  scope :long, -> { where("words > 100") }
+end
+"##)
+        .write("app/models/probe.rb", r##"module Probe
+  def self.check(label, ok)
+    raise "#{label} differs from Rails" unless ok
+  end
+
+  def self.reset
+    [Comment, Post, Author].each(&:delete_all)
+  end
+
+  # Rails: [["p"], 1]
+  def self.has_many_scope_where
+    a = Author.create!(name: "a"); Post.create!(title: "p", author: a, published: true); Post.create!(title: "d", author: a)
+    [a.published_posts.map(&:title), a.published_posts.count]
+  end
+
+  # Rails: [["l"], 1]
+  def self.has_many_named_scope
+    a = Author.create!(name: "a"); Post.create!(title: "l", author: a, words: 500); Post.create!(title: "s", author: a, words: 5)
+    [a.long_posts.map(&:title), a.long_posts.count]
+  end
+
+  # Rails: [nil, "a"]
+  def self.belongs_to_scope_reader
+    a = Author.create!(name: "a", active: false); p = Post.create!(title: "t", author: a)
+    [Post.find(p.id).live_author, Post.find(p.id).author.name]
+  end
+
+  # Rails: [nil, "b"]
+  def self.preload_scoped_belongs_to
+    a = Author.create!(name: "a", active: false); b = Author.create!(name: "b"); Post.create!(title: "1", author: a); Post.create!(title: "2", author: b)
+    Post.preload(:live_author).order(:id).map { |p| p.live_author&.name }
+  end
+
+  # Rails: [["in"], 1]
+  def self.through_scoped_hop
+    a = Author.create!(name: "a"); pp = Post.create!(title: "p", author: a, published: true); dd = Post.create!(title: "d", author: a)
+    Comment.create!(post: pp, body: "in"); Comment.create!(post: dd, body: "out")
+    [a.published_comments.map(&:body), a.published_comments.count]
+  end
+
+  def self.run
+    reset
+    check("has_many_scope_where", has_many_scope_where == [["p"], 1])
+    reset
+    check("has_many_named_scope", has_many_named_scope == [["l"], 1])
+    reset
+    check("belongs_to_scope_reader", belongs_to_scope_reader == [nil, "a"])
+    reset
+    check("preload_scoped_belongs_to", preload_scoped_belongs_to == [nil, "b"])
+    reset
+    check("through_scoped_hop", through_scoped_hop == [["in"], 1])
+  end
+end
+"##)
+        .write("db/schema.rb", r##"ActiveRecord::Schema.define do
+  create_table "authors", force: :cascade do |t|
+    t.string "name"
+    t.boolean "active", default: true
+  end
+  create_table "posts", force: :cascade do |t|
+    t.string "title"
+    t.integer "author_id"
+    t.boolean "published", default: false
+    t.integer "words", default: 0
+  end
+  create_table "comments", force: :cascade do |t|
+    t.integer "post_id"
+    t.string "body"
+  end
+end
+"##)
+}
+
+const SCRIPT: &str = "Probe.run\nputs \"probe passed\"\n";
+
+#[test]
+fn an_association_scope_applies_as_rails_does() {
+    let run = app().run_ruby(SCRIPT);
+    run.assert_passes();
+    assert!(run.stdout.contains("probe passed"), "{}", run.stdout);
+}
+
+#[test]
+#[ignore = "requires the Spinel toolchain"]
+fn an_association_scope_applies_as_rails_does_on_spinel() {
+    let run = app().run_spinel_with_db(SCRIPT);
+    run.assert_passes();
+    assert!(run.stdout.contains("probe passed"), "{}", run.stdout);
+}
+
+/// A strict target has no runtime Relation. A `belongs_to` scope of hash
+/// `where`s joins the key in `find_by`, which folds to SQL there too; any
+/// other scope is the reported gap, and the reader finds by the key alone.
+#[test]
+fn a_strict_target_folds_a_hash_belongs_to_scope_and_reports_any_other() {
+    let unapplied = |overlay: emit_and_run::Overlay| {
+        overlay
+            .emit_warnings(BuildTarget::Rust)
+            .iter()
+            .any(|d| d.message.contains("`belongs_to :live_author`'s scope is not applied"))
+    };
+    assert!(!unapplied(app()), "a hash scope folds");
+    let string_scope = app().edit("app/models/post.rb", "-> { where(active: true) }", "-> { where(\"active = 1\") }");
+    assert!(unapplied(string_scope), "a string scope is reported");
+}

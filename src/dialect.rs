@@ -487,6 +487,11 @@ pub enum Association {
         /// `None` means `id`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         primary_key: Option<Symbol>,
+        /// `belongs_to :live_author, -> { where(active: true) }` — the
+        /// scope lambda's body. Rails' reader and preload find the record
+        /// through it, so a key whose record the scope excludes reads nil.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<Expr>,
     },
     HasMany {
         name: Symbol,

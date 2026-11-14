@@ -3320,9 +3320,11 @@ fn fold_autosave_call_into_hook(
 /// first hop is — recurse, adding one INNER JOIN per hop. Shapes a hop
 /// can't prove (missing models, no matching source) are left on the
 /// shared reader rather than guessed.
-/// KNOWN GAP: association scope-lambdas (`-> { order(...) }`, the
-/// upvoted vote-conditions) are dropped at ingest, so row order/filter
-/// can diverge from Rails until the lambda lands in the IR.
+/// The association's own scope lambda is grafted onto the relation
+/// (`through_reader_body`), and the through association's, when it is
+/// hash `where`s only, filters the through table
+/// (`through_hop_conditions`). KNOWN GAP: any other scope on the through
+/// association is not applied, so its rows can differ from Rails'.
 pub(crate) fn apply_through_assoc_lowering(lcs: &mut [LibraryClass], app: &App) {
     use crate::dialect::Association;
 
@@ -3351,7 +3353,74 @@ pub(crate) fn apply_through_assoc_lowering(lcs: &mut [LibraryClass], app: &App) 
                 continue;
             };
             m.body = through_reader_body(name, target, &join_sql, &where_sql, assoc_scope);
+            if let Some(hop) = through_hop_conditions(model, assoc, app) {
+                graft_through_hop(&mut m.body, hop);
+            }
         }
+    }
+}
+
+/// The through association's own scope, when it is only `where` with
+/// hash conditions (`has_many :published_posts, -> { where(published:
+/// true) }`), as conditions on its table: `where(posts: { published:
+/// true })`. Rails applies that scope to the through rows. A direct
+/// first hop only; any other scope shape stays the gap the pass's doc
+/// records.
+fn through_hop_conditions(model: &crate::dialect::Model, assoc: &crate::dialect::Association, app: &App) -> Option<Vec<Expr>> {
+    use crate::dialect::Association;
+    let Association::HasMany { through: Some(thr_name), .. } = assoc else { return None };
+    let (thr_target, scope) = model.associations().filter(|a| a.name() == thr_name).last().and_then(|thr| match thr {
+        Association::HasMany { target, through: None, scope: Some(scope), .. }
+        | Association::HasOne { target, through: None, scope: Some(scope), .. } => Some((target, scope)),
+        _ => None,
+    })?;
+    let table = app.models.iter().find(|m| &m.name == thr_target)?.table.0.clone();
+    let mut hashes = Vec::new();
+    let mut e = scope;
+    loop {
+        let ExprNode::Send { recv, method, args, block: None, .. } = &*e.node else { return None };
+        let [hash] = args.as_slice() else { return None };
+        let ExprNode::Hash { entries, .. } = &*hash.node else { return None };
+        if method.as_str() != "where" {
+            return None;
+        }
+        let conditions = Expr::new(hash.span, ExprNode::Hash { entries: entries.clone(), kwargs: false });
+        hashes.push(Expr::new(
+            hash.span,
+            ExprNode::Hash {
+                entries: vec![(
+                    Expr::new(hash.span, ExprNode::Lit { value: Literal::Sym { value: table.clone() } }),
+                    conditions,
+                )],
+                kwargs: true,
+            },
+        ));
+        match recv {
+            Some(inner) => e = inner,
+            None => return Some(hashes),
+        }
+    }
+}
+
+/// `<relation>.preloaded(…)` becomes `<relation>.where(<hop>)….preloaded(…)`.
+fn graft_through_hop(body: &mut Expr, hop: Vec<Expr>) {
+    let ExprNode::Send { recv: Some(recv), method, .. } = &mut *body.node else { return };
+    if method.as_str() != "preloaded" {
+        return;
+    }
+    for hash in hop {
+        let span = hash.span;
+        let inner = std::mem::replace(recv, Expr::new(span, ExprNode::Lit { value: Literal::Nil }));
+        *recv = Expr::new(
+            span,
+            ExprNode::Send {
+                recv: Some(inner),
+                method: Symbol::from("where"),
+                args: vec![hash],
+                block: None,
+                parenthesized: true,
+            },
+        );
     }
 }
 
@@ -12190,7 +12259,9 @@ fn preload_targets(model: &crate::dialect::Model, app: &App) -> Vec<(String, Pre
             continue;
         }
         match assoc {
-            Association::BelongsTo { name, target, foreign_key, .. } => {
+            // A scoped one keeps its lazy reader, which finds through the
+            // scope, as a scoped has_many does below.
+            Association::BelongsTo { name, target, foreign_key, scope: None, .. } => {
                 let Some(target_model) = app.models.iter().find(|m| &m.name == target) else {
                     continue;
                 };
