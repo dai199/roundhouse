@@ -745,6 +745,7 @@ pub(in crate::analyze) fn register(classes: &mut HashMap<ClassId, ClassInfo>) {
         ("fetch", Ty::Untyped),
         ("to_h", Ty::Hash { key: std::sync::Arc::new(Ty::Untyped), value: std::sync::Arc::new(Ty::Untyped) }),
         ("empty?", Ty::Bool),
+        ("dig", Ty::Untyped),
         ("method_missing", Ty::Untyped),
     ]);
     {

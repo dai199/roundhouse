@@ -81,13 +81,24 @@ pub fn lower_delegates(app: &mut crate::App) {
 /// `OrderedOptions.new.merge!({ … })`). Any other splat stays a declaration the expansion does not read.
 fn spell_static_splats(app: &mut crate::App) {
     use crate::expr::{ExprNode, Literal};
+    // Not a value that writes as it is read (`register!`, `@x = …`): spelling the names would skip the call that runs it.
+    fn writes(e: &Expr) -> bool {
+        let mut found = matches!(&*e.node, ExprNode::Assign { .. } | ExprNode::OpAssign { .. })
+            || matches!(&*e.node, ExprNode::Send { method, .. } if method.as_str().ends_with('!'));
+        e.node.for_each_child(&mut |c| found = found || writes(c));
+        found
+    }
     fn literal_keys(e: &Expr) -> Option<Vec<crate::ident::Symbol>> {
         match &*e.node {
-            ExprNode::Seq { exprs } => exprs.last().and_then(literal_keys),
+            // Not a body of several statements: the earlier ones run for their effects.
+            ExprNode::Seq { exprs } => match exprs.as_slice() {
+                [only] => literal_keys(only),
+                _ => None,
+            },
             ExprNode::Hash { entries, .. } => entries
                 .iter()
-                .map(|(k, _)| match &*k.node {
-                    ExprNode::Lit { value: Literal::Sym { value } } => Some(value.clone()),
+                .map(|(k, v)| match &*k.node {
+                    ExprNode::Lit { value: Literal::Sym { value } } if !writes(v) => Some(value.clone()),
                     _ => None,
                 })
                 .collect(),
@@ -464,6 +475,9 @@ fn receiver(target: &str) -> std::borrow::Cow<'_, str> {
         "value",
         // The allow_nil forwarder's own local (`synthesized_source`).
         "__allow_nil_target__",
+        "__delegate_args",
+        "__delegate_kwargs",
+        "__delegate_block",
         "key",
         "other",
         "__delegate_target",

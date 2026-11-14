@@ -2,9 +2,11 @@ module ActiveSupport
   class OrderedOptions
     @values: Hash[untyped, untyped]
     @default: untyped
+    @default_proc: Proc?
 
-    def initialize: (?untyped default) -> void
+    def initialize: (?untyped default) ?{ (OrderedOptions, Symbol) -> untyped } -> void
     def []: (String | Symbol key) -> untyped
+    def dig: (String | Symbol key, *untyped rest) -> untyped
     def []=: (String | Symbol key, untyped value) -> untyped
     def merge!: (Hash[untyped, untyped] other) -> OrderedOptions
     def keys: () -> Array[untyped]

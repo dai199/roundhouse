@@ -10,13 +10,24 @@
 # (`ruby_overlay/runtime/active_support_ordered_options.rb`).
 module ActiveSupport
   class OrderedOptions
-    def initialize(default = nil)
+    # Hash.new's default, or its block, which is handed the options and the missing key.
+    def initialize(default = nil, &block)
       @values = {}
       @default = default
+      @default_proc = block
     end
 
     def [](key)
-      @values.fetch(key.to_sym, @default)
+      name = key.to_sym
+      return @values[name] if @values.key?(name)
+      return @default_proc.call(self, name) unless @default_proc.nil?
+      @default
+    end
+
+    def dig(key, *rest)
+      value = self[key]
+      return value if rest.empty? || value.nil?
+      value.dig(*rest)
     end
 
     def []=(key, value)
@@ -40,8 +51,8 @@ module ActiveSupport
 
     # Hash#fetch's fallbacks: a default, or a block handed the missing key.
     def fetch(key, *default, &block)
-      return @values.fetch(key, default[0]) unless default.empty?
       return @values.fetch(key) { |missing| block.call(missing) } unless block.nil?
+      return @values.fetch(key, default[0]) unless default.empty?
       @values.fetch(key)
     end
 
