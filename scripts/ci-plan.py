@@ -1137,7 +1137,7 @@ def spinel_framework_shards(tests, count=SPINEL_FRAMEWORK_SHARDS, timings=None):
 
 
 def spinel_toolchain_shard(tests, shard, count=SPINEL_TOOLCHAIN_SHARDS, timings=None, units=None):
-    """This shard's tests: longest first onto the shard that would end first, by name order within it.
+    """This shard's tests: longest first onto the shard that would end first, and longest first within it.
 
     A unit (tests one shared Spinel build would take, from spinel_bundle_plan) goes to one
     shard whole: split across shards, each part pays the build again. A shard ends once its
@@ -1175,7 +1175,9 @@ def spinel_toolchain_shard(tests, shard, count=SPINEL_TOOLCHAIN_SHARDS, timings=
         longest[i] = max(longest[i], cost(item))
         if i == shard:
             mine.extend(item)
-    return sorted(mine)
+    # Not by name order: the threads start the tests in this order, and a long test listed last starts after the
+    # short ones and passes the shard's deadline (view_component's native build, about ten minutes).
+    return sorted(mine, key=lambda t: (-spinel_toolchain_seconds(t, timings), t))
 
 
 def record_timing(kind, name, seconds, ok, timed_out=False, cpu=None):
