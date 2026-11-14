@@ -8,6 +8,6 @@ fn a_component_renders_its_template_natively() {
     let script = format!("puts \"booted\"\nbegin\n{SCRIPT}rescue => e\n  puts e.class.name\n  puts e.message\n  puts e.backtrace.to_a.first(15)\n  raise\nend\n");
     let run = app.run_spinel_with_db(&script);
     let unknown: Vec<_> = run.errors.iter().filter(|e| !KNOWN_GAPS.iter().any(|gap| e.contains(gap))).collect();
-    assert!(run.program_succeeded() && unknown.is_empty(), "{unknown:#?}\n{}\n{}", run.stdout, run.stderr);
+    assert!(run.program_succeeded() && unknown.is_empty(), "{unknown:#?}\n{}\n{}\n{}\n{}", run.status, run.emitted.display(), run.stdout, run.stderr);
     assert!(run.stdout.contains("view_component passed"), "{}", run.stdout);
 }

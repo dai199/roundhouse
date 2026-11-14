@@ -5,7 +5,7 @@ module ActionView
     def lookup_context: () -> LookupContext
     def view_renderer: () -> nil
     def view_flow: () -> nil
-    def html_escape: (untyped text) -> String
+    def html_escape: (String text) -> String
   end
 
   class OutputBuffer
