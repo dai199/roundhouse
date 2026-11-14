@@ -26,10 +26,13 @@ pub fn apply_method_missing_calls(app: &mut App, registry: &HashMap<ClassId, cra
         .collect();
     // The class outside the program each class descends from, by its written parents (`ActiveSupport::OrderedOptions`
     // for `class Settings < ActiveSupport::OrderedOptions`).
-    let root_of = |id: &ClassId| -> String {
+    // The program's classes from `id` up, then the class outside it the chain ends at.
+    let chain_of = |id: &ClassId| -> (Vec<String>, String) {
         let mut current = id.0.as_str().to_string();
+        let mut chain = Vec::new();
         for _ in 0..32 {
-            let Some(Some(parent)) = parents.get(&current) else { return current };
+            let Some(Some(parent)) = parents.get(&current) else { return (chain, current) };
+            chain.push(current.clone());
             let scope: Vec<&str> = current.split("::").collect();
             let resolved = (0..scope.len())
                 .rev()
@@ -37,12 +40,23 @@ pub fn apply_method_missing_calls(app: &mut App, registry: &HashMap<ClassId, cra
                 .find(|candidate| *candidate != current && parents.contains_key(candidate));
             match resolved {
                 Some(next) => current = next,
-                None => return parent.clone(),
+                None => return (chain, parent.clone()),
             }
         }
-        "Object".to_string()
+        (chain, "Object".to_string())
     };
-    let ordered_options = |id: &ClassId| root_of(id) == "ActiveSupport::OrderedOptions";
+    let root_of = |id: &ClassId| chain_of(id).1;
+    let own_update: crate::det::HashSet<String> = app
+        .library_classes
+        .iter()
+        .filter(|c| c.methods.iter().any(|m| m.name.as_str() == "update" && m.receiver == crate::dialect::MethodReceiver::Instance))
+        .map(|c| c.name.0.as_str().to_string())
+        .collect();
+    // Not a subclass's own `update`, which Ruby finds before the alias.
+    let ordered_options = |id: &ClassId| {
+        let (chain, root) = chain_of(id);
+        root == "ActiveSupport::OrderedOptions" && !chain.iter().any(|c| own_update.contains(c))
+    };
     let core_of = |id: &ClassId| -> &'static [&'static str] {
         // Not Object's alone for Rails' OrderedOptions, a Hash on the ruby family's tree (Spinel's holds one, and
         // answers only what its own class defines).
@@ -59,8 +73,12 @@ pub fn apply_method_missing_calls(app: &mut App, registry: &HashMap<ClassId, cra
     if target == crate::build_target::BuildTarget::Spinel {
         fn rename(e: &mut Expr, ordered_options: &dyn Fn(&ClassId) -> bool) {
             e.node.for_each_child_mut(&mut |c| rename(c, ordered_options));
+            // Not a class object (`PrefBox.update`, `self.class.update`): `Ty::Class` alone does not tell it from an instance.
             if let ExprNode::Send { recv: Some(r), method, .. } = &mut *e.node
                 && method.as_str() == "update"
+                && r.decisions & crate::expr::CLASS_OBJECT_VALUE == 0
+                && !matches!(&*r.node, ExprNode::Const { .. })
+                && !matches!(&*r.node, ExprNode::Send { method, args, .. } if method.as_str() == "class" && args.is_empty())
                 && matches!(r.ty.as_ref().map(Ty::peel_nilable), Some(Ty::Class { id, .. }) if ordered_options(id))
             {
                 *method = Symbol::from("merge!");
