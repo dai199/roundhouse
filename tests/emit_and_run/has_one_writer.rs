@@ -20,9 +20,19 @@ end
   has_one :image, as: :imageable
   has_one :badge, dependent: :destroy
   has_one :card
+  has_one :stamp, dependent: :delete
 end
 "##)
         .write("app/models/badge.rb", r##"class Badge < ApplicationRecord
+  belongs_to :author
+  validate :label_allowed
+
+  def label_allowed
+    errors.add(:label, "is not allowed") if label == "bad"
+  end
+end
+"##)
+        .write("app/models/stamp.rb", r##"class Stamp < ApplicationRecord
   belongs_to :author
   validate :label_allowed
 
@@ -110,6 +120,18 @@ end
       raised = true
     end
     check("old badge kept", raised && Badge.exists?(kept.id) && a.badge.equal?(kept))
+    # dependent: :delete: the row is back and the target kept, but the
+    # record stays destroyed in memory, as in Rails (its delete isn't
+    # enlisted in the transaction).
+    a.stamp = Stamp.new
+    gone = a.stamp
+    raised = false
+    begin
+      a.stamp = Stamp.new(label: "bad")
+    rescue StandardError
+      raised = true
+    end
+    check("old stamp kept", raised && Stamp.exists?(gone.id) && a.stamp.equal?(gone) && gone.destroyed? && !gone.persisted?)
     # A required belongs_to can't take the nulled key: replacing raises,
     # and the old record keeps its key.
     a.card = Card.new
@@ -139,6 +161,10 @@ end
     t.integer "imageable_id"
   end
   create_table "badges", force: :cascade do |t|
+    t.integer "author_id"
+    t.string "label"
+  end
+  create_table "stamps", force: :cascade do |t|
     t.integer "author_id"
     t.string "label"
   end
