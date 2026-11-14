@@ -1363,13 +1363,10 @@ fn compile_components<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V) {
                     lc.include_spans.insert(0, crate::span::Span::synthetic());
                 }
                 view_component_slots(app, vfs, &path, class);
-                // Not a component's own `t` / `translate`, which answers its calls instead of the gem's.
-                let own_translation = app.library_classes.iter().filter(|c| &c.name == class).any(|c| {
-                    c.methods.iter().any(|m| m.receiver == crate::dialect::MethodReceiver::Instance && matches!(m.name.as_str(), "t" | "translate"))
-                });
-                for lc in app.library_classes.iter().filter(|c| &c.name == class && !own_translation) {
+                let answered = translations_answered(app, class);
+                for lc in app.library_classes.iter().filter(|c| &c.name == class) {
                     for m in &lc.methods {
-                        report_component_translations(&m.body);
+                        report_component_translations(&m.body, &answered);
                     }
                 }
             }
@@ -1387,6 +1384,7 @@ fn compile_components<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V) {
             if !renders_as_component(app, class) {
                 continue;
             }
+            let answered_here = translations_answered(app, class);
             let Some(lc) = app.library_classes.iter_mut().find(|c| &c.name == class) else { continue };
             if lc.methods.iter().any(|m| m.name.as_str() == "call" && m.receiver == crate::dialect::MethodReceiver::Instance) {
                 continue;
@@ -1395,9 +1393,7 @@ fn compile_components<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V) {
             let (compiled, map) = crate::erb::compile_erb_mapped(&source);
             let Ok(mut body) = super::expr::ingest_ruby_program(&compiled, &template) else { continue };
             crate::erb::translate_spans(&mut body, &map);
-            if !lc.methods.iter().any(|m| m.receiver == crate::dialect::MethodReceiver::Instance && matches!(m.name.as_str(), "t" | "translate")) {
-                report_component_translations(&body);
-            }
+            report_component_translations(&body, &answered_here);
             // Not its own file's: one outside the app's `app/components` (a gem's) was not registered before the index.
             if late {
                 synthetic_constants(&mut body);
@@ -1421,9 +1417,34 @@ fn synthetic_constants(e: &mut Expr) {
 
 /// A component's `t` / `translate`, which the hook answers with a raise: the gem's per-component I18n backend (sidecar
 /// `*.yml` loaded into an `I18n::Backend::Simple` subclass) is not modelled.
-fn report_component_translations(body: &Expr) {
+/// Which of `t` / `translate` a component's own lineage answers below `ViewComponent::Base` (its own class, an
+/// `ApplicationComponent` it extends), each apart: one does not answer the other's calls.
+fn translations_answered(app: &App, class: &crate::ident::ClassId) -> Vec<&'static str> {
+    let mut answered = Vec::new();
+    let mut current = Some(class.clone());
+    for _ in 0..32 {
+        let Some(name) = current else { break };
+        if name.0.as_str() == "ViewComponent::Base" {
+            break;
+        }
+        let mut parent = None;
+        for c in app.library_classes.iter().filter(|c| c.name == name) {
+            for method in ["t", "translate"] {
+                if c.methods.iter().any(|m| m.receiver == crate::dialect::MethodReceiver::Instance && m.name.as_str() == method) && !answered.contains(&method) {
+                    answered.push(method);
+                }
+            }
+            parent = parent.or_else(|| c.parent.clone());
+        }
+        current = parent;
+    }
+    answered
+}
+
+fn report_component_translations(body: &Expr, answered: &[&str]) {
     if let ExprNode::Send { recv: None, method, .. } = &*body.node
         && matches!(method.as_str(), "t" | "translate")
+        && !answered.contains(&method.as_str())
         && !body.span.is_synthetic()
     {
         super::prism::push(crate::diagnostic::Diagnostic::unsupported(
@@ -1433,7 +1454,7 @@ fn report_component_translations(body: &Expr) {
             "a component's translation (its sidecar locale files read through the gem's I18n backend) is not supported",
         ));
     }
-    body.node.for_each_child(&mut |c| report_component_translations(c));
+    body.node.for_each_child(&mut |c| report_component_translations(c, answered));
 }
 
 fn unsupported_component_macro(call: &ruby_prism::CallNode<'_>) -> Option<&'static str> {
@@ -1564,7 +1585,18 @@ fn view_component_slots<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V, pat
         source.push_str(&format!("  def {name}\n    get_slot(:{name})\n  end\n\n  def {name}?\n    get_slot(:{name}).present?\n  end\n\n"));
     }
     // Not the gem's `instance_method(:"_call_#{name}")`, a name built as it runs: the lambda slots' methods, by name.
-    let lambdas: Vec<&String> = calls.iter().filter(|(_, _, _, lambda)| lambda.is_some()).map(|(name, ..)| name).collect();
+    let mut lambdas: Vec<String> = app
+        .library_classes
+        .iter()
+        .filter(|c| &c.name == class)
+        .flat_map(|c| c.methods.iter())
+        .filter_map(|m| m.name.as_str().strip_prefix("_call_").map(str::to_string))
+        .collect();
+    for (name, ..) in calls.iter().filter(|(_, _, _, lambda)| lambda.is_some()) {
+        if !lambdas.contains(name) {
+            lambdas.push(name.clone());
+        }
+    }
     if !lambdas.is_empty() {
         source.push_str("  def __vc_call_slot_function(slot_name, *args, **kwargs, &block)\n    case slot_name\n");
         for name in lambdas {
@@ -1587,6 +1619,10 @@ fn view_component_slots<V: crate::vfs::Vfs + ?Sized>(app: &mut App, vfs: &V, pat
             synthetic_constants(&mut method.body);
             if let Some(first) = first {
                 method.name_span = crate::span::Span { file: first.file, start: first.start.saturating_sub(1), end: first.start.saturating_sub(1) };
+            }
+            // Not the first file's dispatcher alone: a reopening's lambda slots join it (rebuilt below).
+            if method.name.as_str() == "__vc_call_slot_function" {
+                lc.methods.retain(|m| m.name.as_str() != "__vc_call_slot_function");
             }
             if !lc.methods.iter().any(|m| m.name == method.name && m.receiver == method.receiver) {
                 lc.methods.push(method);
