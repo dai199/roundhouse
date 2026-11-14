@@ -568,6 +568,11 @@ pub enum Association {
         /// `after_save` that stamps the FK (and `as:` type) then saves.
         #[serde(default, skip_serializing_if = "is_false")]
         autosave: bool,
+        /// `validate: true` — the owner is invalid while its new or changed
+        /// target is (Rails' `validate_single_association`). Default false,
+        /// matching Rails for a has_one.
+        #[serde(default, skip_serializing_if = "is_false")]
+        validate: bool,
         /// `primary_key: :source_id` — the OWNER column the foreign key
         /// matches (Rails' `join_primary_key`). `None` means the owner's
         /// own key, `id`. Every reader of this association must go

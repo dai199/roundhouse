@@ -22223,3 +22223,7 @@ mod compiled_rooted_constants;
 mod serializable_resource_as_json;
 #[path = "emit_and_run/belongs_to_target.rs"]
 mod belongs_to_target;
+#[path = "emit_and_run/has_one_writer.rs"]
+mod has_one_writer;
+#[path = "emit_and_run/has_one_validate.rs"]
+mod has_one_validate;

@@ -267,6 +267,7 @@ fn parse_sequel_association(
             as_interface: None,
             scope: None,
             autosave: false,
+            validate: false,
             primary_key: None,
         },
         "many_to_one" => Association::BelongsTo {
