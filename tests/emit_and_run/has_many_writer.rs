@@ -95,9 +95,20 @@ end
     u = c.posts.build(title: "u")
     c.posts = [u]
     check("built kept unsaved", u.new_record? && c.posts.size == 1)
+    check("built kept listed", c.posts.map(&:title) == ["u"] && c.posts.first.equal?(u) && c.posts.length == 1)
     c.posts = []
     c.save!
     check("built then left out", u.new_record? && Post.where(title: "u").count == 0)
+    # A kept built record is saved with the owner.
+    c2 = Author.create!(name: "c2")
+    v = c2.posts.build(title: "v")
+    c2.posts = [v]
+    c2.save!
+    check("built kept saved", v.persisted? && v.author_id == c2.id && c2.posts.map(&:title) == ["v"])
+    # A record pushed after the writer is saved, and the reader sees it.
+    c.posts << Post.new(title: "p")
+    check("pushed after writer", c.posts.map(&:title) == ["p"] && c.posts.size == 1)
+    c.posts = []
     # destroy_all after the writer leaves an empty target.
     c.posts = [Post.new(title: "w")]
     c.posts.destroy_all
