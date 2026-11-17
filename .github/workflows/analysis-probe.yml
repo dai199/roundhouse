@@ -58,7 +58,7 @@ jobs:
           tar -xzf blog-trees.tgz
           sudo apt-get update -q && sudo apt-get install -yq libsqlite3-dev libyaml-dev >/dev/null
           git clone -q https://github.com/matz/spinel sp && git -C sp checkout -q ${{ matrix.p.sp }}
-          make -C sp deps >/dev/null && make -C sp all -j4 >/dev/null
+          make -C sp deps >/dev/null; make -k -C sp all -j4 > /tmp/make.log 2>&1 || grep -E "Error|error:" /tmp/make.log | head -5; test -x sp/spinel
           mkdir -p logs; out=logs/${{ matrix.p.i }}-${{ matrix.p.rh }}.txt
           echo "i=${{ matrix.p.i }} rh=${{ matrix.p.rh }} $(git -C sp log -1 --format='%h %cI %s')" > $out
           cd trees/${{ matrix.p.rh }}
@@ -92,7 +92,7 @@ jobs:
           sudo apt-get update -q && sudo apt-get install -yq libsqlite3-dev libyaml-dev linux-tools-common linux-tools-$(uname -r) >/dev/null 2>&1 || sudo apt-get install -yq linux-tools-azure >/dev/null
           sudo sysctl -w kernel.perf_event_paranoid=-1 >/dev/null
           git clone -q https://github.com/matz/spinel sp && git -C sp log -1 --oneline
-          make -C sp deps >/dev/null && make -C sp all -j4 OPT='-O2 -g -fno-omit-frame-pointer -fno-inline-functions-called-once -fno-optimize-sibling-calls' >/dev/null
+          make -C sp deps >/dev/null; make -k -C sp all -j4 OPT='-O2 -g -fno-omit-frame-pointer -fno-inline-functions-called-once -fno-optimize-sibling-calls' > /tmp/make.log 2>&1 || grep -E "Error|error:" /tmp/make.log | head -5; test -x sp/spinel
           mkdir -p logs
           if [ ${{ matrix.what }} = view_component ]; then
             mkdir vc && tar -xzf split-fixtures/view_component_tree.tgz -C vc && cd vc
