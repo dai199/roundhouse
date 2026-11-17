@@ -39,7 +39,7 @@ jobs:
           n = int(open("/tmp/n.txt").read().split("=")[1])
           pick = sorted({c[round(i * (len(c) - 1) / (n - 1))] for i in range(n)}, key=c.index)
           pts = [{"sp": s, "i": c.index(s), "rh": "main"} for s in pick]
-                    print("points=" + json.dumps(pts))
+          print("points=" + json.dumps(pts))
           PY
   scan:
     needs: emit
