@@ -18,7 +18,7 @@ jobs:
           tar -xzf split-fixtures/real-blog.tar.gz -C split-fixtures
           git clone -q https://github.com/roundhouse-rb/roundhouse rh
           mkdir -p trees
-          for R in main c9d42347a; do
+          for R in main; do
             git -C rh checkout -q $R && (cd rh && cargo build --release --bin roundhouse 2>&1 | tail -1)
             rh/target/release/roundhouse --target spinel split-fixtures/real-blog -o trees/$R 2>&1 | tail -1
           done
@@ -31,15 +31,15 @@ jobs:
       - id: points
         run: |
           git clone -q https://github.com/matz/spinel sp
-          git -C sp log --first-parent --format=%H --since=2026-11-12T00:00:00+09:00 master | tac > /tmp/c.txt
+          read A B N < probe-range.txt
+          git -C sp log --first-parent --format=%H $A^..$B | tac > /tmp/c.txt; echo "N=$N" >> /tmp/n.txt
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json
           c = open('/tmp/c.txt').read().split()
-          n = 12
+          n = int(open("/tmp/n.txt").read().split("=")[1])
           pick = sorted({c[round(i * (len(c) - 1) / (n - 1))] for i in range(n)}, key=c.index)
           pts = [{"sp": s, "i": c.index(s), "rh": "main"} for s in pick]
-          pts += [{"sp": s, "i": c.index(s), "rh": "c9d42347a"} for s in (pick[0], pick[-1])]
-          print("points=" + json.dumps(pts))
+                    print("points=" + json.dumps(pts))
           PY
   scan:
     needs: emit
@@ -63,7 +63,7 @@ jobs:
           echo "i=${{ matrix.p.i }} rh=${{ matrix.p.rh }} $(git -C sp log -1 --format='%h %cI %s')" > $out
           cd trees/${{ matrix.p.rh }}
           rbs=; [ -d sig ] && rbs="--rbs sig"
-          for t in test/article_test.rb test/articles_controller_test.rb; do
+          for t in test/article_test.rb; do
             s=$(date +%s)
             st=0; timeout 1800 $GITHUB_WORKSPACE/sp/spinel $rbs -O 0 --timing -c -o /tmp/x.c $t > /tmp/t.log 2>&1 || st=$?
             echo "$t status=$st wall=$(( $(date +%s) - s )) $(grep -oE 'phase=(an_pre_fixpoint|analysis|analysis_fixpoint) ms=[0-9.]*( rounds=[0-9]*)?' /tmp/t.log | tr '\n' ' ')" >> $GITHUB_WORKSPACE/$out
@@ -77,6 +77,7 @@ jobs:
           path: logs
   perf:
     needs: emit
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
