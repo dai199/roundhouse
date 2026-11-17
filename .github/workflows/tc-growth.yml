@@ -7,44 +7,30 @@ permissions:
 jobs:
   measure:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-rust
-      - name: Build roundhouse and emit
+      - name: Build roundhouse (main) and emit
         run: |
           git clone -q https://github.com/roundhouse-rb/roundhouse rh && git -C rh log -1 --oneline
-          (cd rh && cargo build --release --bin roundhouse)
-          mkdir -p out logs
-          tar -xzf split-fixtures/real-blog.tar.gz -C split-fixtures
+          (cd rh && cargo build --release --bin roundhouse 2>&1 | tail -1)
+          mkdir -p out logs && tar -xzf split-fixtures/real-blog.tar.gz -C split-fixtures
           rh/target/release/roundhouse --target spinel split-fixtures/real-blog -o out/blog 2>&1 | tail -1
           rh/target/release/roundhouse --target spinel split-fixtures/empty -o out/empty 2>&1 | tail -1
-      - name: Base and branch
+      - name: Each Spinel
         run: |
-          sudo apt-get update -q && sudo apt-get install -yq libsqlite3-dev libyaml-dev
+          sudo apt-get update -q && sudo apt-get install -yq libsqlite3-dev libyaml-dev >/dev/null
           git clone -q https://github.com/matz/spinel sp
-          git -C sp fetch -q https://github.com/dai199/spinel nil-scalar-fast:nil-scalar-fast
-          git -C sp rev-parse nil-scalar-fast~1 > /tmp/base.sha
-          find sp/test -name '*.rb' | sed 's|^sp/||' | sort > /tmp/tests.txt
-          cat > /tmp/one.sh <<'X'
-          f="$1"; o=/tmp/corp/$V/$(echo "$f" | tr / _)
-          cd $GITHUB_WORKSPACE/sp && timeout 120 ./spinel "$f" -S > "$o" 2>&1; echo "exit=$?" >> "$o"
-          X
-          for V in base nil-scalar-fast; do
-            if [ $V = base ]; then git -C sp checkout -q $(cat /tmp/base.sha); else git -C sp checkout -q $V; fi
-            make -C sp deps >/dev/null && make -C sp all -j4 >/dev/null && git -C sp log -1 --oneline
+          for V in c0502112 bdcbd2e0 f2fa1e366; do
+            git -C sp checkout -q $V && make -C sp deps >/dev/null && make -C sp all -j4 >/dev/null && git -C sp log -1 --format='%h %cd %s' --date=iso
             for a in blog empty; do for i in 1 2; do
-              ( cd out/$a && $GITHUB_WORKSPACE/sp/spinel main.rb -c -o /tmp/$a-$V.c --force --timing ) > logs/$a-$V-$i.log 2>&1 || echo "$a $V FAILED"
+              ( cd out/$a && $GITHUB_WORKSPACE/sp/spinel main.rb -c -o /tmp/$a-$V.c --force --timing ) > logs/$a-$V-$i.log 2>&1 || echo "$a $V refused"
               echo "$a $V #$i $(grep -o 'phase=analysis ms=[0-9.]*' logs/$a-$V-$i.log) $(grep -o 'phase=analysis_fixpoint ms=[0-9.]* rounds=[0-9]*' logs/$a-$V-$i.log)"
             done; done
-            mkdir -p /tmp/corp/$V
-            export V; xargs -P4 -n1 bash /tmp/one.sh < /tmp/tests.txt
           done | tee logs/apps.txt
-          for a in blog empty; do cmp -s /tmp/$a-base.c /tmp/$a-nil-scalar-fast.c && echo "$a C identical" || echo "$a C DIFFERS"; done | tee -a logs/apps.txt
-          echo "corpus: $(wc -l < /tmp/tests.txt) files, $(diff -rq /tmp/corp/base /tmp/corp/nil-scalar-fast | wc -l) differ" | tee -a logs/apps.txt
-          diff -rq /tmp/corp/base /tmp/corp/nil-scalar-fast | head -50 > logs/corpus-diff.txt || true
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: tc-growth-fix3
+          name: tc-growth-1117
           path: logs
