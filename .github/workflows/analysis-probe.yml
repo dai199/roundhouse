@@ -1,0 +1,115 @@
+name: analysis-probe
+on:
+  push:
+    branches: [analysis-probe]
+permissions:
+  contents: read
+jobs:
+  emit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      points: ${{ steps.points.outputs.points }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-rust
+      - name: Emit real-blog with roundhouse main and c9d42347a
+        run: |
+          tar -xzf split-fixtures/real-blog.tar.gz -C split-fixtures
+          git clone -q https://github.com/roundhouse-rb/roundhouse rh
+          mkdir -p trees
+          for R in main c9d42347a; do
+            git -C rh checkout -q $R && (cd rh && cargo build --release --bin roundhouse 2>&1 | tail -1)
+            rh/target/release/roundhouse --target spinel split-fixtures/real-blog -o trees/$R 2>&1 | tail -1
+          done
+          find trees -name article_test.rb
+          tar -czf blog-trees.tgz trees
+      - uses: actions/upload-artifact@v6
+        with:
+          name: blog-trees
+          path: blog-trees.tgz
+      - id: points
+        run: |
+          git clone -q https://github.com/matz/spinel sp
+          git -C sp log --first-parent --format=%H --since=2026-11-12T00:00:00+09:00 master | tac > /tmp/c.txt
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          c = open('/tmp/c.txt').read().split()
+          n = 12
+          pick = sorted({c[round(i * (len(c) - 1) / (n - 1))] for i in range(n)}, key=c.index)
+          pts = [{"sp": s, "i": c.index(s), "rh": "main"} for s in pick]
+          pts += [{"sp": s, "i": c.index(s), "rh": "c9d42347a"} for s in (pick[0], pick[-1])]
+          print("points=" + json.dumps(pts))
+          PY
+  scan:
+    needs: emit
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        p: ${{ fromJSON(needs.emit.outputs.points) }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: blog-trees
+      - name: Compile two blog tests
+        run: |
+          tar -xzf blog-trees.tgz
+          sudo apt-get update -q && sudo apt-get install -yq libsqlite3-dev libyaml-dev >/dev/null
+          git clone -q https://github.com/matz/spinel sp && git -C sp checkout -q ${{ matrix.p.sp }}
+          make -C sp deps >/dev/null && make -C sp all -j4 >/dev/null
+          mkdir -p logs; out=logs/${{ matrix.p.i }}-${{ matrix.p.rh }}.txt
+          echo "i=${{ matrix.p.i }} rh=${{ matrix.p.rh }} $(git -C sp log -1 --format='%h %cI %s')" > $out
+          cd trees/${{ matrix.p.rh }}
+          for t in test/models/article_test.rb test/controllers/articles_controller_test.rb; do
+            s=$(date +%s)
+            timeout 1800 $GITHUB_WORKSPACE/sp/spinel --rbs sig -O 0 --timing -c -o /tmp/x.c $t > /tmp/t.log 2>&1; st=$?
+            echo "$t status=$st wall=$(( $(date +%s) - s )) $(grep -oE 'phase=(an_pre_fixpoint|analysis|analysis_fixpoint) ms=[0-9.]*( rounds=[0-9]*)?' /tmp/t.log | tr '\n' ' ')" >> $GITHUB_WORKSPACE/$out
+            [ $st = 0 ] || tail -3 /tmp/t.log >> $GITHUB_WORKSPACE/$out
+          done
+          cat $GITHUB_WORKSPACE/$out
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: scan-${{ matrix.p.i }}-${{ matrix.p.rh }}
+          path: logs
+  perf:
+    needs: emit
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        what: [view_component, article_test]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: blog-trees
+      - name: perf on Spinel master
+        run: |
+          sudo apt-get update -q && sudo apt-get install -yq libsqlite3-dev libyaml-dev linux-tools-common linux-tools-$(uname -r) >/dev/null 2>&1 || sudo apt-get install -yq linux-tools-azure >/dev/null
+          sudo sysctl -w kernel.perf_event_paranoid=-1 >/dev/null
+          git clone -q https://github.com/matz/spinel sp && git -C sp log -1 --oneline
+          make -C sp deps >/dev/null && make -C sp all -j4 OPT='-O2 -g -fno-omit-frame-pointer -fno-inline-functions-called-once -fno-optimize-sibling-calls' >/dev/null
+          mkdir -p logs
+          if [ ${{ matrix.what }} = view_component ]; then
+            mkdir vc && tar -xzf split-fixtures/view_component_tree.tgz -C vc && cd vc
+            set -- contract.rb
+          else
+            tar -xzf blog-trees.tgz && cd trees/main
+            set -- --rbs sig -O 0 test/models/article_test.rb
+          fi
+          perf record -F 199 --call-graph fp -o /tmp/p.data $GITHUB_WORKSPACE/sp/spinel "$@" -c -o /tmp/x.c --timing > $GITHUB_WORKSPACE/logs/run.log 2>&1 || true
+          cd $GITHUB_WORKSPACE
+          grep -oE 'phase=[a-z_]+ ms=[0-9.]*( rounds=[0-9]*)?' logs/run.log | sort -t= -k3 -rn | head -25
+          perf report -i /tmp/p.data --children --stdio --percent-limit 1 -g none 2>/dev/null | grep -v '^#' | grep -v '^$' | sed -E 's/ \(inlined\)//' | head -120 > logs/children.txt
+          perf report -i /tmp/p.data --no-children --stdio --percent-limit 0.5 -g none 2>/dev/null | grep -v '^#' | grep -v '^$' | head -60 > logs/self.txt
+          perf script -i /tmp/p.data -F ip,sym 2>/dev/null | gzip > logs/stacks.txt.gz
+          head -40 logs/children.txt; head -25 logs/self.txt
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: perf-${{ matrix.what }}
+          path: logs
