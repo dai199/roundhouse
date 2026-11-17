@@ -1,7 +1,7 @@
 name: analysis-probe
 on:
   push:
-    branches: [analysis-probe]
+    branches: [layout-probe]
 permissions:
   contents: read
 jobs:
