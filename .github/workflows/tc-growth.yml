@@ -5,32 +5,31 @@ on:
 permissions:
   contents: read
 jobs:
-  measure:
+  churn:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-rust
-      - name: Build roundhouse (main) and emit
+      - name: Emit at each main commit since 2026-11-13
         run: |
-          git clone -q https://github.com/roundhouse-rb/roundhouse rh && git -C rh log -1 --oneline
-          (cd rh && cargo build --release --bin roundhouse 2>&1 | tail -1)
-          mkdir -p out logs && tar -xzf split-fixtures/real-blog.tar.gz -C split-fixtures
-          rh/target/release/roundhouse --target spinel split-fixtures/real-blog -o out/blog 2>&1 | tail -1
-          rh/target/release/roundhouse --target spinel split-fixtures/empty -o out/empty 2>&1 | tail -1
-      - name: Each Spinel
-        run: |
-          sudo apt-get update -q && sudo apt-get install -yq libsqlite3-dev libyaml-dev >/dev/null
-          git clone -q https://github.com/matz/spinel sp
-          for V in c0502112 bdcbd2e0 f2fa1e366; do
-            git -C sp checkout -q $V && make -C sp deps >/dev/null && make -C sp all -j4 >/dev/null && git -C sp log -1 --format='%h %cd %s' --date=iso
-            for a in blog empty; do for i in 1 2; do
-              ( cd out/$a && $GITHUB_WORKSPACE/sp/spinel main.rb -c -o /tmp/$a-$V.c --force --timing ) > logs/$a-$V-$i.log 2>&1 || echo "$a $V refused"
-              echo "$a $V #$i $(grep -o 'phase=analysis ms=[0-9.]*' logs/$a-$V-$i.log) $(grep -o 'phase=analysis_fixpoint ms=[0-9.]* rounds=[0-9]*' logs/$a-$V-$i.log)"
-            done; done
-          done | tee logs/apps.txt
+          git clone -q https://github.com/roundhouse-rb/roundhouse rh
+          tar -xzf split-fixtures/real-blog.tar.gz -C split-fixtures
+          mkdir -p logs
+          git -C rh log --first-parent --format='%H %cI' --since=2026-11-13T00:00:00Z main | tac > logs/commits.txt
+          wc -l logs/commits.txt
+          while read sha at; do
+            git -C rh checkout -q "$sha"
+            if ! (cd rh && cargo build --release --bin roundhouse >/dev/null 2>&1); then echo "$sha $at build-failed" | tee -a logs/hashes.txt; continue; fi
+            for a in real-blog empty; do
+              rm -rf "/tmp/o-$a"
+              rh/target/release/roundhouse --target spinel split-fixtures/$a -o /tmp/o-$a >/dev/null 2>&1 || true
+              h[$a]=$( (cd /tmp/o-$a && find . -type f -not -name '*.md' | LC_ALL=C sort | xargs sha256sum) | sha256sum | cut -c1-12)
+            done
+            echo "$sha $at blog=${h[real-blog]} empty=${h[empty]}" | tee -a logs/hashes.txt
+          done < logs/commits.txt
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: tc-growth-1117
+          name: tc-growth-churn
           path: logs
