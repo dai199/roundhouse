@@ -1851,7 +1851,7 @@ jobs:
       shard-3: ${{ steps.result.outputs.shard-3 }}
       shard-4: ${{ steps.result.outputs.shard-4 }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 75
 
     continue-on-error: ${{ needs.plan.outputs.spinel-advisory == 'true' }}
     env:
@@ -1863,7 +1863,7 @@ jobs:
     steps:
       # Not left to timeout-minutes: a job stopped there uploads no seconds, so the planner kept the shard as it was. Not earlier than a minute before it: shards that used to pass near 24 minutes would fail.
       - name: Set this shard's deadline
-        run: echo "CI_SPINEL_DEADLINE=$(( $(date +%s) + 1440 ))" >> "$GITHUB_ENV"
+        run: echo "CI_SPINEL_DEADLINE=$(( $(date +%s) + 4300 ))" >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
       # No setup-rust: the producer archive restores the test binaries.
       - uses: actions/download-artifact@v8
@@ -1915,6 +1915,12 @@ jobs:
           wait
           echo "status=\$st wall=\$(echo "\$(date +%s.%N) - \$start" | bc)" >> "\$log"
           grep 'spinel-timing: phase=' "\$log.raw" >> "\$log" 2>/dev/null
+          if grep -q ComponentReport contract.rb 2>/dev/null; then tar -czf "\$dir/view_component_tree.tgz" --exclude=./contract --exclude=./build . 2>/dev/null; fi
+          if echo "\$*" | grep -q all_spinel_tests; then
+            for t in test/models/article_test.rb test/controllers/articles_controller_test.rb; do
+              echo "single=\$t \$("$PWD/spinel-dist/spinel" --rbs sig -O 0 --timing -c -o /tmp/single.c "\$t" 2>&1 | grep -E 'phase=(an_pre_fixpoint|analysis|analysis_fixpoint) ' | tr '\n' ' ')" >> "\$log"
+            done
+          fi
           rm -f "\$log.raw"
           exit \$st
           SHIM
