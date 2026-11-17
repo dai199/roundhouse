@@ -1903,7 +1903,21 @@ jobs:
       - name: Compile with spinel at -O0
         run: |
           mkdir -p "$RUNNER_TEMP/spinel-shim"
-          printf '#!/bin/sh\nexec "%s" -O0 "$@"\n' "$PWD/spinel-dist/spinel" > "$RUNNER_TEMP/spinel-shim/spinel"
+          cat > "$RUNNER_TEMP/spinel-shim/spinel" <<SHIM
+          #!/bin/bash
+          # fork measurement only: each compile's phases, beside what it compiled
+          dir="$RUNNER_TEMP/spinel-timings/phases"; mkdir -p "\$dir"
+          log="\$dir/\$(date +%s%N)-\$\$.log"
+          { echo "cwd=\$PWD"; echo "args=\$*"; echo "rb_lines=\$(find . -name '*.rb' -not -path './build/*' 2>/dev/null | xargs cat 2>/dev/null | wc -l)"; ls app/components 2>/dev/null | tr '\n' ' ' | sed 's/^/components=/'; echo; head -c 400 contract.rb 2>/dev/null | tr '\n' ' ' | sed 's/^/contract=/'; echo; } > "\$log"
+          start=\$(date +%s.%N)
+          "$PWD/spinel-dist/spinel" -O0 --timing "\$@" 2> >(tee -a "\$log.raw" | grep -v '^spinel-timing:' >&2)
+          st=\$?
+          wait
+          echo "status=\$st wall=\$(echo "\$(date +%s.%N) - \$start" | bc)" >> "\$log"
+          grep 'spinel-timing: phase=' "\$log.raw" >> "\$log" 2>/dev/null
+          rm -f "\$log.raw"
+          exit \$st
+          SHIM
           chmod +x "$RUNNER_TEMP/spinel-shim/spinel"
           echo "$RUNNER_TEMP/spinel-shim" >> "$GITHUB_PATH"
       - uses: actions/download-artifact@v8
