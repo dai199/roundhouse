@@ -62,9 +62,10 @@ jobs:
           mkdir -p logs; out=logs/${{ matrix.p.i }}-${{ matrix.p.rh }}.txt
           echo "i=${{ matrix.p.i }} rh=${{ matrix.p.rh }} $(git -C sp log -1 --format='%h %cI %s')" > $out
           cd trees/${{ matrix.p.rh }}
-          for t in test/models/article_test.rb test/controllers/articles_controller_test.rb; do
+          rbs=; [ -d sig ] && rbs="--rbs sig"
+          for t in test/article_test.rb test/articles_controller_test.rb; do
             s=$(date +%s)
-            timeout 1800 $GITHUB_WORKSPACE/sp/spinel --rbs sig -O 0 --timing -c -o /tmp/x.c $t > /tmp/t.log 2>&1; st=$?
+            st=0; timeout 1800 $GITHUB_WORKSPACE/sp/spinel $rbs -O 0 --timing -c -o /tmp/x.c $t > /tmp/t.log 2>&1 || st=$?
             echo "$t status=$st wall=$(( $(date +%s) - s )) $(grep -oE 'phase=(an_pre_fixpoint|analysis|analysis_fixpoint) ms=[0-9.]*( rounds=[0-9]*)?' /tmp/t.log | tr '\n' ' ')" >> $GITHUB_WORKSPACE/$out
             [ $st = 0 ] || tail -3 /tmp/t.log >> $GITHUB_WORKSPACE/$out
           done
@@ -81,7 +82,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        what: [view_component, article_test]
+        what: [article_test]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -99,11 +100,11 @@ jobs:
             set -- contract.rb
           else
             tar -xzf blog-trees.tgz && cd trees/main
-            set -- --rbs sig -O 0 test/models/article_test.rb
+            set -- -O 0 test/article_test.rb; [ -d sig ] && set -- --rbs sig "$@"
           fi
           perf record -F 199 --call-graph fp -o /tmp/p.data $GITHUB_WORKSPACE/sp/spinel "$@" -c -o /tmp/x.c --timing > $GITHUB_WORKSPACE/logs/run.log 2>&1 || true
           cd $GITHUB_WORKSPACE
-          grep -oE 'phase=[a-z_]+ ms=[0-9.]*( rounds=[0-9]*)?' logs/run.log | sort -t= -k3 -rn | head -25
+          grep -oE 'phase=[a-z_]+ ms=[0-9.]*( rounds=[0-9]*)?' logs/run.log | sort -t "=" -k3 -rn | head -25
           perf report -i /tmp/p.data --children --stdio --percent-limit 1 -g none 2>/dev/null | grep -v '^#' | grep -v '^$' | sed -E 's/ \(inlined\)//' | head -120 > logs/children.txt
           perf report -i /tmp/p.data --no-children --stdio --percent-limit 0.5 -g none 2>/dev/null | grep -v '^#' | grep -v '^$' | head -60 > logs/self.txt
           perf script -i /tmp/p.data -F ip,sym 2>/dev/null | gzip > logs/stacks.txt.gz
