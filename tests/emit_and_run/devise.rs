@@ -211,7 +211,7 @@ fn devise_authenticated_asks_the_warden_proxy_its_engine_stacks() {
         .emit(BuildTarget::Ruby);
     assert!(!errors.iter().any(|e| e.contains("request constraint")), "{errors:#?}");
     let guards = std::fs::read_to_string(tree.join("app/models/roundhouse_route_guards.rb")).expect("guards");
-    assert!(guards.contains("request.env[\"warden\"].send(:authenticate?, scope: :user) && true"), "{guards}");
+    assert!(guards.contains("request.env[\"warden\"].__send__(:authenticate?, scope: :user) && true"), "{guards}");
 }
 
 /// A gem's `Devise.token` (devise-jwt's `Devise.jwt` is written this way) yields a settings object of the gem's own, not `Devise`:
