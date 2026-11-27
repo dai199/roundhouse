@@ -24,6 +24,10 @@ class Relay
   def self.send(name)
     "relayed #{name}"
   end
+
+  def self.via_self
+    self.send(:hour)
+  end
 end
 
 class Probe
@@ -42,7 +46,7 @@ class Probe
   end
 
   def relayed
-    Relay.send(:hour)
+    Relay.send(:hour) + " " + Relay.via_self
   end
 
   def shout
@@ -77,7 +81,7 @@ const SCRIPT: &str = r##"def probe_text
   text
 end
 text = probe_text
-raise "probe: #{text.inspect}" unless text == "HEY QUIET Hey 7 sent hour relayed hour"
+raise "probe: #{text.inspect}" unless text == "HEY QUIET Hey 7 sent hour relayed hour relayed hour"
 puts "literal send passed"
 "##;
 
@@ -102,10 +106,22 @@ fn a_literal_send_on_an_unknown_receiver_is_kernel_s_on_spinel() {
 controller.request_method = "GET"
 controller.params = {}
 controller.process_action(:index)
-raise "probe: #{controller.body}" unless controller.body == "HEY QUIET Hey 7 sent hour relayed hour"
+raise "probe: #{controller.body}" unless controller.body == "HEY QUIET Hey 7 sent hour relayed hour relayed hour"
 puts "literal send passed"
 "##,
     );
     run.assert_passes();
     assert!(run.stdout.contains("literal send passed"), "{}", run.stdout);
+}
+
+/// A String the app reopens with a `send` of its own keeps `send` on a String receiver (only the emit is checked:
+/// running it would hand the whole app that `send`).
+#[test]
+fn a_reopened_builtin_s_own_send_keeps_send() {
+    let (tree, errors) = app()
+        .write("lib/string_send.rb", "class String\n  def send(name, *args)\n    \"own #{name}\"\n  end\nend\n")
+        .emit(roundhouse::project::BuildTarget::Ruby);
+    assert!(errors.is_empty(), "{errors:?}");
+    let probe = std::fs::read_to_string(tree.join("app/models/probe.rb")).expect("emitted probe");
+    assert!(probe.contains(r#""quiet".send(:upcase)"#), "{probe}");
 }

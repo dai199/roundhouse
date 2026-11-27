@@ -1007,10 +1007,15 @@ fn rewrite(
         // A typed receiver too: the native build may not keep its class (fugit's `@t.send(:wday_in_month)` on an EoTime).
         let kernels = recv.as_ref().is_some_and(|r| match &r.ty {
             None | Some(Ty::Var { .. }) | Some(Ty::Untyped) => true,
+            // Not one side for `self`: in a class method it is the class, whose singleton `send` the instance side misses.
+            Some(Ty::Class { id, .. }) if matches!(&*r.node, ExprNode::SelfRef) => {
+                !defines_own_send(registry, id, false) && !defines_own_send(registry, id, true)
+            }
             Some(Ty::Class { id, .. }) => !defines_own_send(registry, id, matches!(&*r.node, ExprNode::Const { .. })),
             // Not a union's: one of its classes may define its own `send`.
-            Some(Ty::Union { .. }) => false,
-            _ => true,
+            Some(Ty::Union { .. } | Ty::SelfInstance | Ty::Record { .. }) => false,
+            // Not every builtin value: an app may reopen its class with a `send` of its own.
+            Some(ty) => builtin_class(ty).is_none_or(|name| !defines_own_send(registry, &ClassId(Symbol::from(name)), false)),
         });
         if method.as_str() == "send" && kernels && matches!(&*target.node, ExprNode::Lit { value: Literal::Sym { .. } })
             && let ExprNode::Send { method, .. } = &mut *e.node
@@ -1305,6 +1310,22 @@ pub(crate) fn method_return_via_registry(
         }
     }
     None
+}
+
+fn builtin_class(ty: &Ty) -> Option<&'static str> {
+    Some(match ty {
+        Ty::Int => "Integer",
+        Ty::Float => "Float",
+        Ty::Str => "String",
+        Ty::Sym => "Symbol",
+        Ty::Date => "Date",
+        Ty::Time => "Time",
+        Ty::Nil => "NilClass",
+        Ty::Array { .. } | Ty::Tuple { .. } => "Array",
+        Ty::Hash { .. } => "Hash",
+        Ty::Fn(_) => "Proc",
+        _ => return None,
+    })
 }
 
 /// `class_side`: the receiver is the class itself (a constant), whose `send` is a singleton one or an extension's.
