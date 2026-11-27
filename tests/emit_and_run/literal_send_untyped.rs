@@ -3,14 +3,20 @@
 //! `send`, and refused `wday_in_month` as returning a bool. The send is written `__send__`, Kernel's alone, which is
 //! the method Ruby's `send` is for such a receiver. So is a typed one whose class has no `send` of its own (fugit's
 //! `@t` is an `EoTime`, which the native build did not keep); a class with its own `send`, or a singleton one on a
-//! constant receiver, keeps it, and so does a
-//! String argument (a socket's own `send(data)`).
+//! constant receiver, keeps it, as does a union
+//! holding such a class, and so does a String argument (a socket's own `send(data)`).
 
 use super::emit_and_run;
 
 const PROBE: &str = r#"class Clock
   def hour
     7
+  end
+end
+
+class Watch
+  def hour
+    8
   end
 end
 
@@ -56,6 +62,12 @@ class Probe
     Relay.send(:hour) + " " + Relay.via_self + " " + Relay.via_local
   end
 
+  def either
+    pick = @raw.empty? ? Watch.new : Clock.new
+    mixed = @raw.empty? ? Clock.new : Channel.new
+    pick.send(:hour).to_s + " " + mixed.send(:hour)
+  end
+
   def shout
     JSON.parse(@raw)["word"].send(:upcase)
   end
@@ -76,7 +88,7 @@ fn app() -> emit_and_run::Overlay {
         .write("lib/probe.rb", PROBE)
         .write(
             "app/controllers/probes_controller.rb",
-            "class ProbesController < ApplicationController\n  def index\n    probe = Probe.new('{\"word\":\"hey\"}')\n    render plain: \"#{probe.shout} #{probe.typed} #{probe.named} #{probe.hour} #{probe.relay} #{probe.relayed}\"\n  end\nend\n",
+            "class ProbesController < ApplicationController\n  def index\n    probe = Probe.new('{\"word\":\"hey\"}')\n    render plain: \"#{probe.shout} #{probe.typed} #{probe.named} #{probe.hour} #{probe.relay} #{probe.relayed} #{probe.either}\"\n  end\nend\n",
         )
 }
 
@@ -88,7 +100,7 @@ const SCRIPT: &str = r##"def probe_text
   text
 end
 text = probe_text
-raise "probe: #{text.inspect}" unless text == "HEY QUIET Hey 7 sent hour sent hour relayed hour relayed hour relayed hour"
+raise "probe: #{text.inspect}" unless text == "HEY QUIET Hey 7 sent hour sent hour relayed hour relayed hour relayed hour 7 sent hour"
 puts "literal send passed"
 "##;
 
@@ -102,6 +114,8 @@ fn a_literal_send_on_an_unknown_receiver_is_kernel_s() {
     assert!(probe.contains("@clock.__send__(:hour)"), "{probe}");
     assert!(probe.contains("@channel.send(:hour)"), "{probe}");
     assert!(probe.contains("Relay.send(:hour)"), "{probe}");
+    assert!(probe.contains("pick.__send__(:hour)"), "{probe}");
+    assert!(probe.contains("mixed.send(:hour)"), "{probe}");
     assert!(probe.contains(r#"["word"].send("capitalize")"#), "{probe}");
 }
 
@@ -113,7 +127,7 @@ fn a_literal_send_on_an_unknown_receiver_is_kernel_s_on_spinel() {
 controller.request_method = "GET"
 controller.params = {}
 controller.process_action(:index)
-raise "probe: #{controller.body}" unless controller.body == "HEY QUIET Hey 7 sent hour sent hour relayed hour relayed hour relayed hour"
+raise "probe: #{controller.body}" unless controller.body == "HEY QUIET Hey 7 sent hour sent hour relayed hour relayed hour relayed hour 7 sent hour"
 puts "literal send passed"
 "##,
     );

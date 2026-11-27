@@ -1005,17 +1005,7 @@ fn rewrite(
         // `send` (the Spinel tree's `Faye::WebSocket#send`); `__send__` is Kernel's alone, as Ruby's `send` is here.
         // Nor a String argument: `ws.send("hello")` on a socket is the socket's own `send`, which a Symbol never reaches.
         // A typed receiver too: the native build may not keep its class (fugit's `@t.send(:wday_in_month)` on an EoTime).
-        let kernels = recv.as_ref().is_some_and(|r| match &r.ty {
-            None | Some(Ty::Var { .. }) | Some(Ty::Untyped) => true,
-            // Not one side by the receiver's shape: a class value types as its instance (`self` in a class method,
-            // `k = Relay`), and a constant may hold an instance (`RELAY = Channel.new`).
-            Some(Ty::Class { id, .. }) => !defines_own_send(registry, id, false) && !defines_own_send(registry, id, true),
-            // Not a union's: one of its classes may define its own `send`.
-            Some(Ty::Union { .. } | Ty::SelfInstance | Ty::Record { .. }) => false,
-            // Not every builtin value: an app may reopen its class with a `send` of its own.
-            Some(Ty::Bool) => ["TrueClass", "FalseClass"].iter().all(|name| !defines_own_send(registry, &ClassId(Symbol::from(*name)), false)),
-            Some(ty) => builtin_class(ty).is_none_or(|name| !defines_own_send(registry, &ClassId(Symbol::from(name)), false)),
-        });
+        let kernels = recv.as_ref().is_some_and(|r| r.ty.as_ref().is_none_or(|ty| kernel_send_receiver(registry, ty)));
         if method.as_str() == "send" && kernels && matches!(&*target.node, ExprNode::Lit { value: Literal::Sym { .. } })
             && let ExprNode::Send { method, .. } = &mut *e.node
         {
@@ -1309,6 +1299,21 @@ pub(crate) fn method_return_via_registry(
         }
     }
     None
+}
+
+fn kernel_send_receiver(registry: &HashMap<ClassId, ClassInfo>, ty: &Ty) -> bool {
+    match ty {
+        Ty::Var { .. } | Ty::Untyped => true,
+        // Not one side by the receiver's shape: a class value types as its instance (`self` in a class method,
+        // `k = Relay`), and a constant may hold an instance (`RELAY = Channel.new`).
+        Ty::Class { id, .. } => !defines_own_send(registry, id, false) && !defines_own_send(registry, id, true),
+        // Not a union as a whole: each of its classes may define its own `send`, so every member is checked.
+        Ty::Union { variants } => variants.iter().all(|v| kernel_send_receiver(registry, v)),
+        Ty::SelfInstance | Ty::Record { .. } => false,
+        // Not every builtin value: an app may reopen its class with a `send` of its own.
+        Ty::Bool => ["TrueClass", "FalseClass"].iter().all(|name| !defines_own_send(registry, &ClassId(Symbol::from(*name)), false)),
+        ty => builtin_class(ty).is_none_or(|name| !defines_own_send(registry, &ClassId(Symbol::from(name)), false)),
+    }
 }
 
 fn builtin_class(ty: &Ty) -> Option<&'static str> {
