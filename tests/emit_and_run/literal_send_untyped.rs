@@ -125,3 +125,15 @@ fn a_reopened_builtin_s_own_send_keeps_send() {
     let probe = std::fs::read_to_string(tree.join("app/models/probe.rb")).expect("emitted probe");
     assert!(probe.contains(r#""quiet".send(:upcase)"#), "{probe}");
 }
+
+/// Either Boolean class: `true.send(:to_s)` reaches TrueClass's own `send` when the app defines one.
+#[test]
+fn a_reopened_boolean_s_own_send_keeps_send() {
+    let (tree, errors) = app()
+        .write("lib/true_send.rb", "class TrueClass\n  def send(name, *args)\n    \"own\"\n  end\nend\n")
+        .edit("lib/probe.rb", "  def typed\n", "  def flagged\n    true.send(:to_s)\n  end\n\n  def typed\n")
+        .emit(roundhouse::project::BuildTarget::Ruby);
+    assert!(errors.is_empty(), "{errors:?}");
+    let probe = std::fs::read_to_string(tree.join("app/models/probe.rb")).expect("emitted probe");
+    assert!(probe.contains("true.send(:to_s)"), "{probe}");
+}

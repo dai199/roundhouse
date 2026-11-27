@@ -1015,6 +1015,7 @@ fn rewrite(
             // Not a union's: one of its classes may define its own `send`.
             Some(Ty::Union { .. } | Ty::SelfInstance | Ty::Record { .. }) => false,
             // Not every builtin value: an app may reopen its class with a `send` of its own.
+            Some(Ty::Bool) => ["TrueClass", "FalseClass"].iter().all(|name| !defines_own_send(registry, &ClassId(Symbol::from(*name)), false)),
             Some(ty) => builtin_class(ty).is_none_or(|name| !defines_own_send(registry, &ClassId(Symbol::from(name)), false)),
         });
         if method.as_str() == "send" && kernels && matches!(&*target.node, ExprNode::Lit { value: Literal::Sym { .. } })
