@@ -1007,11 +1007,10 @@ fn rewrite(
         // A typed receiver too: the native build may not keep its class (fugit's `@t.send(:wday_in_month)` on an EoTime).
         let kernels = recv.as_ref().is_some_and(|r| match &r.ty {
             None | Some(Ty::Var { .. }) | Some(Ty::Untyped) => true,
-            // Not one side for `self`: in a class method it is the class, whose singleton `send` the instance side misses.
-            Some(Ty::Class { id, .. }) if matches!(&*r.node, ExprNode::SelfRef) => {
-                !defines_own_send(registry, id, false) && !defines_own_send(registry, id, true)
-            }
-            Some(Ty::Class { id, .. }) => !defines_own_send(registry, id, matches!(&*r.node, ExprNode::Const { .. })),
+            Some(Ty::Class { id, .. }) if matches!(&*r.node, ExprNode::Const { .. }) => !defines_own_send(registry, id, true),
+            // Not one side for anything but a constant: a class value types as its instance (`self` in a class method,
+            // `k = Relay`), and its singleton `send` is the one a call reaches.
+            Some(Ty::Class { id, .. }) => !defines_own_send(registry, id, false) && !defines_own_send(registry, id, true),
             // Not a union's: one of its classes may define its own `send`.
             Some(Ty::Union { .. } | Ty::SelfInstance | Ty::Record { .. }) => false,
             // Not every builtin value: an app may reopen its class with a `send` of its own.

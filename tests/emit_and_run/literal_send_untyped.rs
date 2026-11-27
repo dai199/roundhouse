@@ -28,6 +28,11 @@ class Relay
   def self.via_self
     self.send(:hour)
   end
+
+  def self.via_local
+    k = Relay
+    k.send(:hour)
+  end
 end
 
 class Probe
@@ -46,7 +51,7 @@ class Probe
   end
 
   def relayed
-    Relay.send(:hour) + " " + Relay.via_self
+    Relay.send(:hour) + " " + Relay.via_self + " " + Relay.via_local
   end
 
   def shout
@@ -81,7 +86,7 @@ const SCRIPT: &str = r##"def probe_text
   text
 end
 text = probe_text
-raise "probe: #{text.inspect}" unless text == "HEY QUIET Hey 7 sent hour relayed hour relayed hour"
+raise "probe: #{text.inspect}" unless text == "HEY QUIET Hey 7 sent hour relayed hour relayed hour relayed hour"
 puts "literal send passed"
 "##;
 
@@ -106,7 +111,7 @@ fn a_literal_send_on_an_unknown_receiver_is_kernel_s_on_spinel() {
 controller.request_method = "GET"
 controller.params = {}
 controller.process_action(:index)
-raise "probe: #{controller.body}" unless controller.body == "HEY QUIET Hey 7 sent hour relayed hour relayed hour"
+raise "probe: #{controller.body}" unless controller.body == "HEY QUIET Hey 7 sent hour relayed hour relayed hour relayed hour"
 puts "literal send passed"
 "##,
     );
