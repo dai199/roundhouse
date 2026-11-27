@@ -4687,12 +4687,30 @@ fn walk_decl_body_with_visibility<'pr>(
                         let is_class_attr =
                             kw.starts_with("cattr_") || kw.starts_with("mattr_");
                         let mut names: Vec<Symbol> = Vec::new();
+                        let mut unread_splat = false;
                         if let Some(args) = call.arguments() {
                             for arg in args.arguments().iter() {
                                 if let Some(s) = symbol_value(&arg) {
                                     names.push(Symbol::from(s));
+                                } else if let Some(splat) = arg.as_splat_node() {
+                                    // `attr_reader *PROPERTIES` (mission_control's JobsRelation): the names a constant of the
+                                    // body above holds as a literal list. Not dropped where it holds no such list.
+                                    let held = splat.expression().and_then(|e| e.as_constant_read_node()).and_then(|c| {
+                                        let name = constant_id_str(&c.name()).to_string();
+                                        out.constants.iter().rev().find(|(n, _)| n.as_str() == name).and_then(|(_, v)| literal_symbols(v))
+                                    });
+                                    match held {
+                                        Some(list) => names.extend(list),
+                                        None => unread_splat = true,
+                                    }
                                 }
                             }
+                        }
+                        if unread_splat {
+                            if let Ok(e) = ingest_expr(&stmt, file) {
+                                out.unknown_calls.push(e);
+                            }
+                            continue;
                         }
                         // Unmodeled mattr/cattr options (instance_*, splats,
                         // uningestible defaults) stay as unknown_calls — same
@@ -9066,5 +9084,20 @@ fn file_constants_holder(file: &str, constants: &[(Symbol, Expr)]) -> LibraryCla
         conditional_definitions: Vec::new(),
         unknown_calls: Vec::new(),
         class_ivar_initializers: Vec::new(),
+    }
+}
+
+/// The names an Array literal of Symbols holds (`%i[queue_name status]`, frozen or not); `None` for any other value.
+fn literal_symbols(e: &Expr) -> Option<Vec<Symbol>> {
+    match &*e.node {
+        ExprNode::Array { elements, .. } => elements
+            .iter()
+            .map(|el| match &*el.node {
+                ExprNode::Lit { value: crate::expr::Literal::Sym { value } } => Some(value.clone()),
+                _ => None,
+            })
+            .collect(),
+        ExprNode::Send { recv: Some(r), method, args, .. } if method.as_str() == "freeze" && args.is_empty() => literal_symbols(r),
+        _ => None,
     }
 }
