@@ -1,13 +1,30 @@
 //! A `try` whose class defines its own (parslet's atoms' `try(source, context, consume_all)`, called as
 //! `obj.try(source, self, consume_all)` from its parse cache): ActiveSupport's Object#try is not the method, so the
 //! call is not written as its body (`respond_to?(source)` raised on lobsters' search parse). An untyped receiver in a
-//! program with such a class takes the class's `try` where it answers one, and ActiveSupport's otherwise.
+//! program with such a class takes the class's `try` where it answers one, and ActiveSupport's otherwise. A receiver
+//! only a subclass's method types (parslet's `Parser#try` calling the `root` each parser defines) takes its own.
 
 use super::emit_and_run;
 
 const PROBE: &str = r#"class Atom
   def try(source, context, consume_all)
     source + (consume_all ? "!" : "?")
+  end
+end
+
+class Grammar
+  def run(source)
+    root.try(source, self, true)
+  end
+end
+
+class WordGrammar < Grammar
+  def initialize
+    @atom = Atom.new
+  end
+
+  def root
+    @atom
   end
 end
 
@@ -33,6 +50,11 @@ class Probe
     JSON.parse(@raw)["word"].try(name) || "none"
   end
 
+  def grammar
+    source = "word"
+    WordGrammar.new.run(source)
+  end
+
   def picked
     name = "label"
     pick = @raw.empty? ? Atom.new : Plain.new
@@ -47,11 +69,11 @@ fn app() -> emit_and_run::Overlay {
         .write("lib/probe.rb", PROBE)
         .write(
             "app/controllers/probes_controller.rb",
-            "class ProbesController < ApplicationController\n  def index\n    probe = Probe.new('{\"word\":\"hey\"}')\n    render plain: probe.typed + \" \" + probe.untyped + \" \" + probe.picked\n  end\nend\n",
+            "class ProbesController < ApplicationController\n  def index\n    probe = Probe.new('{\"word\":\"hey\"}')\n    render plain: probe.typed + \" \" + probe.untyped + \" \" + probe.picked + \" \" + probe.grammar\n  end\nend\n",
         )
 }
 
-const EXPECTED: &str = "atom! none plain";
+const EXPECTED: &str = "atom! none plain word!";
 
 #[test]
 fn a_class_s_own_try_is_called() {
@@ -67,6 +89,8 @@ puts "own try passed"
     run.assert_passes();
     let probe = std::fs::read_to_string(run.emitted.join("app/models/probe.rb")).expect("emitted probe");
     assert!(probe.contains("@atom.try(source, self, true)"), "{probe}");
+    // A method only the subclasses define answers as they do, so `root` is an Atom or nil and its own `try` is called.
+    assert!(!probe.contains("public_send(source"), "{probe}");
 }
 
 #[test]

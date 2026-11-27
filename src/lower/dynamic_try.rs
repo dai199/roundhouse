@@ -61,7 +61,10 @@ fn rewrite(e: &mut Expr, registry: &HashMap<ClassId, ClassInfo>) {
         then_branch: send("public_send", sent),
         else_branch: nil(),
     });
-    let mut guarded = Expr::new(span, ExprNode::If { cond: send("nil?", Vec::new()), then_branch: nil(), else_branch: answer });
+    // Not ActiveSupport's body for a value that is nil or of such a class (parslet's `root`, an Entity or nil): its own
+    // `try` past nil, which ActiveSupport answers nil.
+    let otherwise = if own == Own::UnlessNil { send("try", sent_again.clone()) } else { answer };
+    let mut guarded = Expr::new(span, ExprNode::If { cond: send("nil?", Vec::new()), then_branch: nil(), else_branch: otherwise });
     // Not ActiveSupport's for a receiver that may be of such a class: the emitted runtime defines no Object#try, so
     // only a class's own `try` answers `respond_to?(:try)`.
     if own == Own::Maybe {
@@ -83,6 +86,8 @@ fn rewrite(e: &mut Expr, registry: &HashMap<ClassId, ClassInfo>) {
 enum Own {
     Never,
     Maybe,
+    /// Its own `try` unless nil, whose ActiveSupport `try` answers nil.
+    UnlessNil,
     Always,
 }
 
@@ -104,9 +109,10 @@ fn own_try(registry: &HashMap<ClassId, ClassInfo>, ty: Option<&Ty>) -> Own {
             }
         }
         Some(Ty::Union { variants }) => {
-            let each: Vec<Own> = variants.iter().map(|v| own_try(registry, Some(v))).collect();
-            if each.iter().all(|o| *o == Own::Always) {
-                Own::Always
+            let each: Vec<Own> = variants.iter().filter(|v| !matches!(v, Ty::Nil)).map(|v| own_try(registry, Some(v))).collect();
+            let nilable = variants.iter().any(|v| matches!(v, Ty::Nil));
+            if !each.is_empty() && each.iter().all(|o| *o == Own::Always) {
+                if nilable { Own::UnlessNil } else { Own::Always }
             } else if each.iter().all(|o| *o == Own::Never) {
                 Own::Never
             } else {

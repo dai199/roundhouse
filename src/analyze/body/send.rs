@@ -1353,6 +1353,40 @@ impl<'a> BodyTyper<'a> {
 
     /// Does `of` or an ancestor define `method` class-side (a scope, a
     /// `def self.…`, a runtime-declared class method)?
+    /// The return types of `method` as the strict subclasses of `of` define it, each its own first definition below
+    /// `of`; empty when none does.
+    fn descendant_instance_answers(&self, of: &ClassId, method: &Symbol) -> Vec<Ty> {
+        let classes = self.classes();
+        let below = |id: &ClassId| {
+            let mut seen = crate::det::HashSet::default();
+            let mut current = classes.get(id).and_then(|c| c.parent.clone());
+            while let Some(p) = current {
+                if &p == of {
+                    return true;
+                }
+                if !seen.insert(p.clone()) {
+                    break;
+                }
+                current = classes.get(&p).and_then(|c| c.parent.clone());
+            }
+            false
+        };
+        let mut out: Vec<Ty> = Vec::new();
+        for (id, cls) in classes.iter().filter(|(id, _)| below(id)) {
+            if let Some(ty) = cls.instance_methods.get(method) {
+                let ty = unwrap_fn_ret(&ty.subst_self(&Ty::Class { id: id.clone(), args: Vec::new().into() }));
+                // Not a definition not typed yet (an earlier round's): it would make the whole answer untyped.
+                if matches!(ty, Ty::Untyped | Ty::Var { .. }) {
+                    continue;
+                }
+                if !out.contains(&ty) {
+                    out.push(ty);
+                }
+            }
+        }
+        out
+    }
+
     pub(super) fn class_side_defines(&self, of: &ClassId, method: &Symbol) -> bool {
         let mut current = Some(of.clone());
         for _ in 0..32 {
@@ -2481,6 +2515,15 @@ impl<'a> BodyTyper<'a> {
                         };
                     }
                     current_id = cls.parent.as_ref();
+                }
+                // Not unanswered where the class's subclasses define the method: a value of the class is an instance of
+                // one of them where the call runs (parslet's `Parser#try` calls `root`, which each parser defines). A
+                // plain instance raises there, so their answers are all the call has.
+                if !kernel_class_side && !class_dynamic_finder && !unknown_named_ancestor && (instance_receiver || !self.class_side_defines(id, method)) {
+                    let below = self.descendant_instance_answers(id, method);
+                    if !below.is_empty() {
+                        return below.into_iter().fold(Ty::Bottom, crate::analyze::body::union_of);
+                    }
                 }
                 // Rails synthesizes the same per-column finders on the model
                 // class as on its relations. Keep source definitions above
