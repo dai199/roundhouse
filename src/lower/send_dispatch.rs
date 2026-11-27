@@ -1334,7 +1334,12 @@ fn builtin_class(ty: &Ty) -> Option<&'static str> {
 
 /// `class_side`: the receiver is the class itself (a constant), whose `send` is a singleton one or an extension's.
 fn defines_own_send(registry: &HashMap<ClassId, ClassInfo>, class: &ClassId, class_side: bool) -> bool {
-    let send = Symbol::from("send");
+    defines_own(registry, class, "send", class_side)
+}
+
+/// Whether `class` (or what it inherits or includes, short of Object and Kernel) defines its own `name`.
+pub(crate) fn defines_own(registry: &HashMap<ClassId, ClassInfo>, class: &ClassId, name: &str, class_side: bool) -> bool {
+    let send = Symbol::from(name);
     let mut seen: BTreeSet<ClassId> = BTreeSet::new();
     let mut stack = vec![class.clone()];
     while let Some(cid) = stack.pop() {
@@ -1346,7 +1351,7 @@ fn defines_own_send(registry: &HashMap<ClassId, ClassInfo>, class: &ClassId, cla
             if cls.class_methods.contains_key(&send) || cls.class_side_hook_methods.contains(&send) || cls.unknown_class_side_hook {
                 return true;
             }
-            if cls.class_method_extensions.iter().chain(&cls.hook_extensions).any(|m| defines_own_send(registry, m, false)) {
+            if cls.class_method_extensions.iter().chain(&cls.hook_extensions).any(|m| defines_own(registry, m, name, false)) {
                 return true;
             }
         } else if cls.instance_methods.contains_key(&send) {

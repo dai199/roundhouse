@@ -22319,6 +22319,8 @@ mod content_security_policy;
 mod find_or_create_variable_block;
 #[path = "emit_and_run/lowered_sends.rs"]
 mod lowered_sends;
+#[path = "emit_and_run/own_try.rs"]
+mod own_try;
 #[path = "emit_and_run/included_alias.rs"]
 mod included_alias;
 #[path = "emit_and_run/simple_format_sanitize.rs"]
