@@ -36,6 +36,8 @@ class Relay
 end
 
 class Probe
+  CHANNEL = Channel.new
+
   def initialize(raw)
     @raw = raw
     @clock = Clock.new
@@ -47,7 +49,7 @@ class Probe
   end
 
   def relay
-    @channel.send(:hour)
+    @channel.send(:hour) + " " + CHANNEL.send(:hour)
   end
 
   def relayed
@@ -86,7 +88,7 @@ const SCRIPT: &str = r##"def probe_text
   text
 end
 text = probe_text
-raise "probe: #{text.inspect}" unless text == "HEY QUIET Hey 7 sent hour relayed hour relayed hour relayed hour"
+raise "probe: #{text.inspect}" unless text == "HEY QUIET Hey 7 sent hour sent hour relayed hour relayed hour relayed hour"
 puts "literal send passed"
 "##;
 
@@ -111,7 +113,7 @@ fn a_literal_send_on_an_unknown_receiver_is_kernel_s_on_spinel() {
 controller.request_method = "GET"
 controller.params = {}
 controller.process_action(:index)
-raise "probe: #{controller.body}" unless controller.body == "HEY QUIET Hey 7 sent hour relayed hour relayed hour relayed hour"
+raise "probe: #{controller.body}" unless controller.body == "HEY QUIET Hey 7 sent hour sent hour relayed hour relayed hour relayed hour"
 puts "literal send passed"
 "##,
     );

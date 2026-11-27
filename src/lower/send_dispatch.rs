@@ -1007,9 +1007,8 @@ fn rewrite(
         // A typed receiver too: the native build may not keep its class (fugit's `@t.send(:wday_in_month)` on an EoTime).
         let kernels = recv.as_ref().is_some_and(|r| match &r.ty {
             None | Some(Ty::Var { .. }) | Some(Ty::Untyped) => true,
-            Some(Ty::Class { id, .. }) if matches!(&*r.node, ExprNode::Const { .. }) => !defines_own_send(registry, id, true),
-            // Not one side for anything but a constant: a class value types as its instance (`self` in a class method,
-            // `k = Relay`), and its singleton `send` is the one a call reaches.
+            // Not one side by the receiver's shape: a class value types as its instance (`self` in a class method,
+            // `k = Relay`), and a constant may hold an instance (`RELAY = Channel.new`).
             Some(Ty::Class { id, .. }) => !defines_own_send(registry, id, false) && !defines_own_send(registry, id, true),
             // Not a union's: one of its classes may define its own `send`.
             Some(Ty::Union { .. } | Ty::SelfInstance | Ty::Record { .. }) => false,
